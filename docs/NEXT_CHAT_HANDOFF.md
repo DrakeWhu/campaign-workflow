@@ -12,6 +12,8 @@ Development is done locally under Git. SUNRISE receives the workflow through Git
 
 This workflow is being developed directly with ChatGPT in small auditable pieces. OpenCode is not used for this workflow.
 
+The workflow is intended to be generic. Capillary guiding is the first real production example, not the architecture.
+
 ## Current repository
 
 Local development path:
@@ -22,7 +24,7 @@ C:\Users\juan.rodriguez-perez\OneDrive - ELI ERIC\Desktop\campaign-workflow
 
 Repository initialized with Git.
 
-Recent commits:
+Recent commits before Fase 2:
 
 ```text
 b6eb066 Initialize campaign workflow documentation and example config
@@ -30,10 +32,16 @@ d548040 Add generic case state initialization
 <latest> Normalize line endings for HPC workflow
 ```
 
-The latest commit hash should be obtained with:
+After Fase 2 local, there should be a new commit similar to:
+
+```text
+<latest> Add generic raw validation workflow
+```
+
+The latest commit hash should always be obtained with:
 
 ```powershell
-git log --oneline -3
+git log --oneline -5
 ```
 
 ## Hard design constraints
@@ -55,6 +63,8 @@ git log --oneline -3
 * State alone is never sufficient permission to delete raw data.
 * Scripts must be visible, auditable, and runnable directly on SUNRISE.
 * Deployment to SUNRISE should happen through Git, preferably tags or pinned commits.
+* For WarpX/PyWarpX and SLURM submitters, do not invent scripts from scratch if working scripts already exist; ask for the current files unless explicitly told to build from zero.
+* For this workflow, changes should be done directly with ChatGPT in small auditable chunks. Do not switch to OpenCode for implementation.
 
 ## Core abstraction
 
@@ -87,6 +97,8 @@ locks
 manifests
 storage accounting
 safe path checks
+atomic JSON writes
+safe transition rules
 ```
 
 The workflow core should not know about:
@@ -136,7 +148,7 @@ cleanup globs
 
 without rewriting the core workflow.
 
-## Repository layout after Fase 0 and Fase 1
+## Repository layout after Fase 0, Fase 1, and Fase 2a
 
 Expected tree:
 
@@ -161,16 +173,22 @@ campaign-workflow/
 │   │   ├── __init__.py
 │   │   ├── atomic_io.py
 │   │   ├── tsv_cases.py
-│   │   └── state.py
+│   │   ├── state.py
+│   │   ├── path_safety.py
+│   │   ├── manifests.py
+│   │   └── transitions.py
 │   ├── diagnostics/
-│   │   └── __init__.py
+│   │   ├── __init__.py
+│   │   └── openpmd_hdf5.py
 │   ├── analysis/
 │   │   └── __init__.py
 │   └── cli/
 │       ├── __init__.py
-│       └── init_case_states.py
+│       ├── init_case_states.py
+│       └── validate_raw_case.py
 ├── slurm/
 └── tests/
+    ├── test_raw_validation.py
     └── fake_campaign/
         ├── campaign.json
         ├── cases.tsv
@@ -203,6 +221,18 @@ Fase 0 commit:
 
 ```text
 b6eb066 Initialize campaign workflow documentation and example config
+```
+
+Important correction:
+
+```text
+docs/CONFIG_CONTRAST.md
+```
+
+was renamed/fixed to:
+
+```text
+docs/CONFIG_CONTRACT.md
 ```
 
 ## Completed Fase 1
@@ -293,6 +323,189 @@ Implementation notes:
 * `.gitattributes` was added to force LF line endings for Python, shell, JSON, Markdown, TSV, YAML, etc.
 * LF normalization is important because future SLURM/bash scripts must run correctly on Linux/SUNRISE.
 
+## Completed Fase 2a — Local generic raw validation against fake raw files
+
+Fase 2a has now been implemented locally.
+
+Purpose:
+
+```text
+Validate raw diagnostics according to campaign.json.
+Implement generic raw diagnostic validation.
+Implement first adapter stack with fake files and openpmd_hdf5 support prepared.
+Write validation evidence into validation.json.
+Write raw manifests atomically.
+Transition Sim_done -> Raw_validated on success.
+Transition Sim_done -> Validation_failed on failure.
+Do not delete anything.
+Do not analyze guiding metrics.
+Do not depend on capillary-specific physics.
+```
+
+Implemented files:
+
+```text
+campaign_workflow/core/path_safety.py
+campaign_workflow/core/manifests.py
+campaign_workflow/core/transitions.py
+campaign_workflow/diagnostics/openpmd_hdf5.py
+campaign_workflow/cli/validate_raw_case.py
+tests/test_raw_validation.py
+```
+
+Main command shape:
+
+```powershell
+python -m campaign_workflow.cli.validate_raw_case --campaign-root tests\fake_campaign --case-id 0 --dry-run --verbose
+python -m campaign_workflow.cli.validate_raw_case --campaign-root tests\fake_campaign --case-id 0 --verbose
+```
+
+The CLI supports:
+
+```text
+--campaign-root
+--case-id repeated multiple times
+--dry-run
+--verbose
+```
+
+The adapter supports diagnostic kinds:
+
+```text
+fake
+openpmd_hdf5
+```
+
+For `fake`, allowed suffix defaults to:
+
+```text
+.fake
+```
+
+For `openpmd_hdf5`, allowed suffixes default to:
+
+```text
+.h5
+.hdf5
+```
+
+The current `openpmd_hdf5` validation is intentionally minimal:
+
+```text
+path safety
+glob resolution
+file count
+suffix check
+regular file check
+inside CASE_DIR check
+symlink escape rejection
+non-empty file check
+minimum age check
+HDF5 open/readability check using h5py
+```
+
+Strict openPMD semantic validation is not implemented yet. It can be added later using `openPMD-api` or more detailed metadata checks without changing the core workflow contract.
+
+## Fase 2a safety contract
+
+The raw validator rejects:
+
+```text
+absolute globs
+globs containing ..
+absolute config paths
+paths containing ..
+files outside CASE_DIR
+symlink escapes outside CASE_DIR
+directories instead of files
+empty files
+suffixes not allowed by diagnostic config
+files younger than min_age_seconds
+diagnostics with fewer files than min_files
+unsupported diagnostic kinds
+state-incompatible validation attempts
+```
+
+The raw validator does not:
+
+```text
+delete files
+delete directories
+run rm -rf
+modify WarpX/PyWarpX inputs
+run analysis
+compute guiding metrics
+mark cleanup as allowed
+```
+
+Important invariant:
+
+```text
+cleanup.cleanup_allowed = false
+```
+
+after raw validation, even if raw validation succeeds.
+
+Reason:
+
+```text
+Raw validation alone does not authorize cleanup. Reduced validation is still required.
+```
+
+## Fase 2a state transitions
+
+Raw validation is allowed from:
+
+```text
+Sim_done
+Validation_failed
+Raw_validated
+```
+
+Successful validation transitions to:
+
+```text
+Raw_validated
+```
+
+Failed validation transitions to:
+
+```text
+Validation_failed
+```
+
+Validation from `Created` is rejected without writing state/validation/manifests.
+
+This is intentional: raw validation should only run after simulation completion or when revalidating/recovering a previous raw validation attempt.
+
+## Fase 2a local test result
+
+Command run:
+
+```powershell
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+Observed result:
+
+```text
+Ran 5 tests in 0.230s
+
+OK (skipped=1)
+```
+
+The skipped test is the symlink escape test. On Windows this can be skipped if the environment cannot create symlinks without special privileges. This is acceptable locally. On Linux/SUNRISE, this test should ideally run and pass because it protects against symlink escapes outside `CASE_DIR`.
+
+Tests covered:
+
+```text
+successful fake raw validation writes manifest and state
+dry-run does not write manifest or change state
+missing required raw files marks Validation_failed
+incompatible Created state is rejected without writing
+symlink escape is rejected when symlink creation is available
+```
+
 ## Current state machine
 
 Main generic states:
@@ -342,36 +555,59 @@ CSV_validated
 
 The concrete meaning of raw/reduced is defined by `campaign.json`.
 
-## Intended full roadmap
+## Immediate next decision
 
-### Fase 0 — Documentation and config contract
-
-Completed.
-
-Purpose:
+Fase 2a is locally implemented with fake raw diagnostics. The next decision is whether to do:
 
 ```text
-Define architecture, safety contract, config contract, and example campaign.
+Option A — Fase 1b SUNRISE dry-run/check now
 ```
 
-### Fase 1 — Generic state initialization
-
-Completed locally.
-
-Purpose:
+or:
 
 ```text
-Read campaign.json and cases.tsv.
-Create/check per-case state.json and validation.json.
-Create per-case runtime directories.
-No raw validation yet.
-No analysis yet.
-No cleanup yet.
+Option B — Fase 2b local HDF5/openPMD smoke test first
 ```
 
-### Fase 1b — SUNRISE dry-run/check
+Recommended order:
 
-Next operational bridge before Fase 2 on real data.
+```text
+1. Commit Fase 2a locally.
+2. Run/verify latest git status and log.
+3. Do Fase 2b local minimal HDF5 smoke test if h5py is available locally.
+4. Then deploy to SUNRISE through Git for Fase 1b dry-run/check.
+5. Then run validate_raw_case --dry-run on 1 real SUNRISE case.
+```
+
+Reason:
+
+```text
+Fase 2a already proves the generic safety machinery.
+A tiny local HDF5 smoke test would verify that the openpmd_hdf5 branch works syntactically with h5py before touching real SUNRISE files.
+SUNRISE should first be used in dry-run/check mode only.
+```
+
+## Commit commands after Fase 2a
+
+Run:
+
+```powershell
+git status
+git add campaign_workflow tests docs\NEXT_CHAT_HANDOFF.md
+git commit -m "Add generic raw validation workflow"
+git log --oneline -5
+```
+
+If `docs/NEXT_CHAT_HANDOFF.md` is updated after the Fase 2 commit, either amend the commit or make a second documentation commit:
+
+```powershell
+git add docs\NEXT_CHAT_HANDOFF.md
+git commit -m "Update workflow handoff after raw validation phase"
+```
+
+## Fase 1b — SUNRISE dry-run/check
+
+Operational bridge before touching real raw HDF5/openPMD data in write mode.
 
 Purpose:
 
@@ -400,70 +636,80 @@ python -m campaign_workflow.cli.init_case_states --campaign-root . --check
 
 Do not execute write mode on SUNRISE until dry-run output is inspected.
 
-### Fase 2 — Generic raw validation + openPMD/HDF5 adapter
+If the campaign already has case directories and a real `cases.tsv`, do not regenerate or reorder `cases.tsv`. It is immutable after campaign start.
 
-Next development phase.
+## Fase 2b — Optional local HDF5/openPMD smoke test
 
 Purpose:
 
 ```text
-Validate raw diagnostics according to campaign.json.
-Implement first diagnostic adapter: openpmd_hdf5.
-Write validation evidence into validation.json.
-Write raw manifests.
-Transition Sim_done -> Raw_validated, or -> Validation_failed.
+Verify that the openpmd_hdf5 diagnostic branch works with h5py locally.
+Use tiny artificial HDF5 files.
+Do not require strict openPMD metadata yet.
+Do not use real WarpX data yet.
 ```
 
-Expected new files:
+Expected possible test addition:
 
 ```text
-campaign_workflow/core/path_safety.py
-campaign_workflow/core/manifests.py
-campaign_workflow/core/transitions.py
-campaign_workflow/diagnostics/openpmd_hdf5.py
-campaign_workflow/cli/validate_raw_case.py
+tests/test_raw_validation_hdf5.py
+```
+
+or an extra method in:
+
+```text
+tests/test_raw_validation.py
+```
+
+Checks:
+
+```text
+valid .h5 file opens with h5py -> Raw_validated
+invalid .h5 payload -> Validation_failed
+.h5 suffix allowed
+.hdf5 suffix allowed
+non-HDF5 suffix rejected
+```
+
+Skip HDF5 tests cleanly if `h5py` is not installed locally.
+
+## Fase 2c — SUNRISE real raw validation dry-run
+
+Purpose:
+
+```text
+Run validate_raw_case against real SUNRISE case directories and real WarpX/openPMD HDF5 files in dry-run mode.
 ```
 
 Expected command shape:
 
-```powershell
-python -m campaign_workflow.cli.validate_raw_case --campaign-root tests\fake_campaign --case-id 0 --dry-run
+```bash
+cd /gpfs/home/jrodriguez/warpx_runs/capillaries_bo_full_campaign
+export PYTHONPATH="$PWD/workflow:${PYTHONPATH:-}"
+
+python -m campaign_workflow.cli.validate_raw_case --campaign-root . --case-id 42 --dry-run --verbose
 ```
 
-For real SUNRISE campaign later:
+Only after inspecting dry-run output:
 
 ```bash
-python -m campaign_workflow.cli.validate_raw_case --campaign-root . --case-id 42 --dry-run
-python -m campaign_workflow.cli.validate_raw_case --campaign-root . --case-id 42
+python -m campaign_workflow.cli.validate_raw_case --campaign-root . --case-id 42 --verbose
 ```
 
-Raw validation checks should include:
+Do not run write mode over all cases until one or a few cases have been inspected manually.
 
-```text
-case directory exists
-state is compatible
-configured raw diagnostic exists
-glob resolves files
-file count >= min_files
-files have allowed suffixes
-files are regular files
-files are inside CASE_DIR
-files are not symlink escapes
-files are non-empty
-files have minimum age
-HDF5 files open with h5py
-openPMD metadata/series validation if available
-manifest written atomically
-validation.json updated atomically
+Potential SUNRISE checks before using real HDF5 validation:
+
+```bash
+python - <<'PY'
+import h5py
+print("h5py", h5py.__version__)
+PY
 ```
 
-Fase 2 must not delete anything.
+If `h5py` is missing on SUNRISE, either load the correct module/environment or keep openpmd_hdf5 validation dry-run disabled until the environment is fixed.
 
-Fase 2 must not analyze guiding metrics.
-
-Fase 2 must not depend on capillary-specific physics.
-
-### Fase 3 — Analysis adapter framework + first guiding adapter
+## Fase 3 — Analysis adapter framework + first guiding adapter
 
 Purpose:
 
@@ -493,7 +739,7 @@ or:
 Raw_validated -> Analyzing -> Analysis_failed
 ```
 
-Analysis should produce reduced outputs defined by campaign.json, e.g.:
+Analysis should produce reduced outputs defined by `campaign.json`, e.g.:
 
 ```text
 post/guiding_metrics.csv
@@ -502,7 +748,14 @@ post/analysis_done.json
 
 The core should only validate that configured outputs exist and satisfy the reduced-output contract.
 
-### Fase 4 — Reduced-output validation
+Important architectural rule:
+
+```text
+The analysis adapter can be guiding-specific.
+The core cannot be guiding-specific.
+```
+
+## Fase 4 — Reduced-output validation
 
 Purpose:
 
@@ -531,7 +784,16 @@ state moves to Reduced_validated
 
 This should remain generic enough for non-guiding CSV outputs.
 
-### Fase 5 — Storage snapshot
+Potential state flow:
+
+```text
+Analyzing -> Reduced_validated
+Raw_validated -> Reduced_validated
+```
+
+The second transition may be useful if analysis was run outside the workflow but reduced outputs exist and pass the contract.
+
+## Fase 5 — Storage snapshot
 
 Purpose:
 
@@ -568,7 +830,7 @@ cases_by_state
 
 This will later support quota decisions before launching more simulations.
 
-### Fase 6 — Cleanup dry-run
+## Fase 6 — Cleanup dry-run
 
 Purpose:
 
@@ -598,11 +860,12 @@ verify case is not running if possible
 resolve cleanup globs
 validate every candidate path
 write manifest
-write cleanup validation evidence
 delete nothing
 ```
 
-### Fase 7 — Cleanup execute
+Cleanup dry-run must never decide based on state alone.
+
+## Fase 7 — Cleanup execute
 
 Purpose:
 
@@ -633,7 +896,11 @@ No directory deletion in V1.
 
 No reinterpretation of globs during execute.
 
-### Fase 8 — SLURM wrappers
+No deletion outside CASE_DIR.
+
+No deletion of files not listed in the validated manifest.
+
+## Fase 8 — SLURM wrappers
 
 Purpose:
 
@@ -663,7 +930,9 @@ write logs
 
 Do not put core logic in SLURM scripts.
 
-### Fase 9 — Passive optimizer tick, not MORBO yet
+Before writing SLURM wrappers, ask for the existing working SUNRISE/SLURM files if any exist. Do not invent operational HPC submitters blindly.
+
+## Fase 9 — Passive optimizer tick, not MORBO yet
 
 Purpose:
 
@@ -677,7 +946,19 @@ Do not launch jobs yet.
 
 This is explicitly after the validation/cleanup base works.
 
-### Fase 10 — MORBO / recursive optimization
+Expected future concepts:
+
+```text
+observations.tsv
+rankings
+plots
+score/objective calculation
+multiobjective extension point
+```
+
+This phase should not launch simulations.
+
+## Fase 10 — MORBO / recursive optimization
 
 Future phase.
 
@@ -692,6 +973,17 @@ submits simulation jobs if quota allows
 ```
 
 This is not part of V1.
+
+Future optimizer architecture must preserve:
+
+```text
+raw metrics in results/reduced outputs
+objective/score as derived layer
+explicit seeds
+checkpoint/restart semantics
+safe quota checks
+no dependency on a resident daemon in V1
+```
 
 ## Cleanup safety summary
 
@@ -715,18 +1007,41 @@ explicit regular files
 inside CASE_DIR
 matching configured raw_delete_globs
 listed in validated manifest
+after raw validation
+after reduced validation
+after delete manifest dry-run
 ```
+
+## Important implementation notes for future chats
+
+* Use the ZIP/repo state as source of truth when code is provided.
+* Do not assume uncommitted files exist; ask for ZIP or relevant file contents when necessary.
+* Do not generate opaque patch files for operational HPC code.
+* Prefer visible, auditable, directly copyable code and commands.
+* Do not modify `lwfa_3d.py`, PyWarpX input templates, or physics parameters unless Juan explicitly asks.
+* Keep all CLI tools separate by responsibility.
+* Keep all cleanup behavior redundant and conservative.
+* Use `unittest`, not pytest.
+* Test command preferred by Juan:
+
+```powershell
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+Do not suggest pytest unless Juan explicitly asks.
 
 ## Next recommended chat opening
 
 Start the next chat with:
 
 ```text
-Seguimos desde este handoff. Vamos con Fase 2, pero antes quiero decidir si hacemos Fase 1b en SUNRISE o si implementamos Fase 2 local con fake raw files primero.
+Seguimos desde este handoff. Fase 2a local está implementada y los tests pasan. Quiero decidir si hacemos Fase 2b con un HDF5 fake local o si pasamos ya a Fase 1b en SUNRISE con dry-run/check.
 ```
 
 Recommended next step:
 
 ```text
-Implement Fase 2 locally against fake raw diagnostics first, then deploy to SUNRISE for dry-run against real HDF5/openPMD files.
+Commit Fase 2a, then either:
+1. add a tiny local HDF5 smoke test for openpmd_hdf5, or
+2. deploy to SUNRISE through Git and run only dry-run/check commands first.
 ```
