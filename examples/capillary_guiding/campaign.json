@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "campaign_name": "capillaries_bo_full_campaign",
+  "description": "First production example: WarpX/PyWarpX capillary campaign with openPMD/HDF5 raw diagnostics and guiding metrics as reduced output.",
+
+  "case_manifest": "cases.tsv",
+  "case_manifest_format": "tsv",
+  "case_id_column": "CASE_ID",
+  "case_name_column": "CASE_NAME",
+
+  "simulation": {
+    "backend": "warpx_picmi",
+    "scheduler": "slurm",
+    "input_script": "input.py",
+    "completion_marker": "post/sim_done.json",
+    "failure_marker": "post/sim_failed.json",
+    "notes": "The workflow does not own the physics input. The input script is expected to consume case-specific environment variables such as CAP_*."
+  },
+
+  "raw_diagnostics": [
+    {
+      "name": "fields_openpmd",
+      "kind": "openpmd_hdf5",
+      "path": "diags",
+      "glob": "diags/**/*.h5",
+      "allowed_suffixes": [".h5", ".hdf5"],
+      "min_files": 1,
+      "min_age_seconds": 600,
+      "required": true,
+      "notes": "WarpX FieldDiagnostic writes openPMD HDF5 diagnostics under the configured write_dir."
+    }
+  ],
+
+  "analysis": {
+    "name": "guiding",
+    "kind": "python_adapter",
+    "adapter": "guiding",
+    "inputs": ["fields_openpmd"],
+    "outputs": [
+      {
+        "name": "guiding_metrics",
+        "kind": "csv",
+        "path": "post/guiding_metrics.csv",
+        "min_rows": 1,
+        "required_columns": [],
+        "required": true
+      }
+    ],
+    "notes": "This is the first analysis adapter. It must remain replaceable by another analysis module in future campaigns."
+  },
+
+  "cleanup": {
+    "raw_delete_globs": ["diags/**/*.h5", "diags/**/*.hdf5"],
+    "require_raw_validated": true,
+    "require_reduced_validated": true,
+    "require_delete_manifest": true,
+    "allow_directory_delete": false,
+    "notes": "Cleanup is manifest-driven and may only delete explicit HDF5 files after redundant validation."
+  },
+
+  "storage": {
+    "snapshot_dir": "snapshots",
+    "reservation_dir": "reservations",
+    "events_dir": "events"
+  },
+
+  "state": {
+    "state_file": "state.json",
+    "validation_file": "validation.json",
+    "locks_dir": "locks",
+    "manifests_dir": "manifests",
+    "post_dir": "post"
+  }
+}

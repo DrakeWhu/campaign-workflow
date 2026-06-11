@@ -1,0 +1,47 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+
+# Test/cache
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Runtime campaign state - never commit real campaign state by accident
+state.json
+validation.json
+locks/
+manifests/
+snapshots/
+events/
+reservations/
+array_logs/
+logs/
+post/
+plots/
+
+# Heavy simulation outputs
+*.h5
+*.hdf5
+*.bp
+*.bp4
+*.bp5
+*.openpmd
+diags/
+checkpoints/
+
+# Local scratch
+scratch/
+tmp/
