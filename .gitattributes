@@ -1,0 +1,24 @@
+﻿# Default: keep text normalized as LF in the repository.
+* text=auto eol=lf
+
+# Python / shell / config files must stay LF for Linux/HPC execution.
+*.py text eol=lf
+*.sh text eol=lf
+*.bash text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.tsv text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Binary / heavy outputs.
+*.h5 binary
+*.hdf5 binary
+*.bp binary
+*.bp4 binary
+*.bp5 binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
