@@ -103,3 +103,61 @@ Never edit the physics input unless explicitly requested.
 Never propose destructive commands without explicit path-level safety and confirmation.
 
 Never use `rm -rf` on user data or campaign roots.
+
+---
+
+## Fase 1 local status
+
+Fase 1 has been implemented and tested locally on `tests/fake_campaign`.
+
+Implemented files:
+
+```text
+campaign_workflow/__init__.py
+campaign_workflow/core/__init__.py
+campaign_workflow/core/atomic_io.py
+campaign_workflow/core/tsv_cases.py
+campaign_workflow/core/state.py
+campaign_workflow/cli/__init__.py
+campaign_workflow/cli/init_case_states.py
+campaign_workflow/diagnostics/__init__.py
+campaign_workflow/analysis/__init__.py
+tests/fake_campaign/campaign.json
+tests/fake_campaign/cases.tsv
+tests/fake_campaign/000_fake_case/.gitkeep
+tests/fake_campaign/001_fake_case/.gitkeep
+tests/fake_campaign/002_fake_case/.gitkeep
+```
+
+Validated commands:
+
+```
+python -m campaign_workflow.cli.init_case_states --campaign-root tests\fake_campaign --dry-run --verbose
+python -m campaign_workflow.cli.init_case_states --campaign-root tests\fake_campaign --verbose
+python -m campaign_workflow.cli.init_case_states --campaign-root tests\fake_campaign --check --verbose
+python -m campaign_workflow.cli.init_case_states --campaign-root tests\fake_campaign --case-id 1 --check --verbose
+```
+
+Observed result:
+
+```
+cases_processed=3
+cases_with_errors=0
+errors=0
+destructive_operations=0
+```
+
+Important implementation note:
+
+PowerShell may write UTF-8 files with BOM. The JSON loaders were updated to use `utf-8-sig` so `campaign.json`, `state.json`, and `validation.json` are tolerant to BOM on Windows.
+
+Current state semantics:
+
+- `state.json` initializes cases as `Created`.
+- `validation.json` initializes empty raw/reduced validation sections.
+- `cleanup.cleanup_allowed` is initialized as `false`.
+- No HDF5, openPMD, SLURM, analysis, or cleanup logic exists yet.
+
+Next recommended step:
+
+Run Fase 1 as a SUNRISE dry-run/check against a real campaign root after deploying the repo through Git. Then start Fase 2: generic raw validation plus the first `openpmd_hdf5` diagnostic adapter.

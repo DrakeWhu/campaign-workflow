@@ -1,0 +1,57 @@
+﻿{
+  "schema_version": 1,
+  "campaign_name": "fake_campaign",
+  "case_manifest": "cases.tsv",
+  "case_manifest_format": "tsv",
+  "case_id_column": "CASE_ID",
+  "case_name_column": "CASE_NAME",
+  "simulation": {
+    "backend": "fake",
+    "scheduler": "none",
+    "input_script": "input.py",
+    "completion_marker": "post/sim_done.json",
+    "failure_marker": "post/sim_failed.json"
+  },
+  "raw_diagnostics": [
+    {
+      "name": "fake_raw",
+      "kind": "fake",
+      "path": "diags",
+      "glob": "diags/**/*.fake",
+      "min_files": 1,
+      "min_age_seconds": 0,
+      "required": true
+    }
+  ],
+  "analysis": {
+    "name": "fake_analysis",
+    "kind": "fake",
+    "adapter": "fake",
+    "inputs": ["fake_raw"],
+    "outputs": [
+      {
+        "name": "fake_metrics",
+        "kind": "csv",
+        "path": "post/fake_metrics.csv",
+        "min_rows": 1,
+        "required_columns": ["iteration"],
+        "required": true
+      }
+    ]
+  },
+  "cleanup": {
+    "raw_delete_globs": ["diags/**/*.fake"],
+    "require_raw_validated": true,
+    "require_reduced_validated": true,
+    "require_delete_manifest": true,
+    "allow_directory_delete": false
+  },
+  "state": {
+    "state_file": "state.json",
+    "validation_file": "validation.json",
+    "locks_dir": "locks",
+    "manifests_dir": "manifests",
+    "post_dir": "post",
+    "logs_dir": "logs"
+  }
+}
