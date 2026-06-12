@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import argparse
@@ -15,7 +16,10 @@ from campaign_workflow.core.state import (
     validate_validation_document,
 )
 from campaign_workflow.core.transitions import (
+    ensure_legacy_reduced_validation_compatible,
     ensure_reduced_validation_compatible,
+    legacy_reduced_validation_failure_transition,
+    legacy_reduced_validation_success_transition,
     reduced_validation_failure_transition,
     reduced_validation_success_transition,
 )
@@ -41,6 +45,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         help="Restrict validation to one case ID. Can be passed multiple times.",
+    )
+
+    parser.add_argument(
+        "--legacy-reduced-only",
+        action="store_true",
+        help=(
+            "Validate reduced outputs for legacy campaigns where raw diagnostics are no longer available. "
+            "This does not create raw validation evidence and never authorizes cleanup."
+        ),
     )
 
     parser.add_argument(
@@ -90,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"campaign_root={campaign_root}")
     print(f"campaign_name={config.get('campaign_name')}")
     print(f"selected_cases={len(cases)}")
+    print(f"legacy_reduced_only={bool(args.legacy_reduced_only)}")
 
     for case in cases:
         result = validate_one_case(
@@ -97,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             case=case,
             reduced_outputs=reduced_outputs,
+            legacy_reduced_only=bool(args.legacy_reduced_only),
             dry_run=args.dry_run,
         )
 
@@ -113,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[case {case.case_id}] {case.case_name}")
             print(f"  case_ok={result.get('case_ok')}")
             print(f"  target_state={result.get('target_state')}")
+            print(f"  legacy_reduced_only={result.get('legacy_reduced_only')}")
 
             for action in result.get("actions", []):
                 prefix = "WOULD" if args.dry_run else "OK"
@@ -141,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"cases_validated={cases_validated}")
     print(f"cases_with_errors={cases_with_errors}")
     print(f"errors={total_errors}")
+    print(f"legacy_reduced_only={bool(args.legacy_reduced_only)}")
     print(f"mode={'dry-run' if args.dry_run else 'write'}")
     print("destructive_operations=0")
 
@@ -155,6 +172,7 @@ def validate_one_case(
     config: dict[str, Any],
     case: CaseRecord,
     reduced_outputs: list[Any],
+    legacy_reduced_only: bool,
     dry_run: bool,
 ) -> dict[str, Any]:
     layout = get_state_layout(config)
@@ -168,6 +186,7 @@ def validate_one_case(
         "case_dir": str(case_dir),
         "case_ok": False,
         "target_state": None,
+        "legacy_reduced_only": legacy_reduced_only,
         "outputs": [],
         "actions": [],
         "errors": [],
@@ -192,15 +211,19 @@ def validate_one_case(
         return result
 
     try:
-        ensure_reduced_validation_compatible(state_doc)
+        if legacy_reduced_only:
+            ensure_legacy_reduced_validation_compatible(state_doc)
+        else:
+            ensure_reduced_validation_compatible(state_doc)
     except Exception as exc:
         result["errors"].append(str(exc))
         return result
 
-    raw_evidence_errors = _validate_required_raw_evidence(config, validation_doc)
-    if raw_evidence_errors:
-        result["errors"].extend(raw_evidence_errors)
-        return result
+    if not legacy_reduced_only:
+        raw_evidence_errors = _validate_required_raw_evidence(config, validation_doc)
+        if raw_evidence_errors:
+            result["errors"].extend(raw_evidence_errors)
+            return result
 
     updated_validation = copy.deepcopy(validation_doc)
     reduced_section = updated_validation.setdefault("reduced", {})
@@ -248,6 +271,7 @@ def validate_one_case(
         output_name = summary["output_name"]
         output_kind = summary["output_kind"]
         summary["required"] = required
+        summary["legacy_reduced_only"] = legacy_reduced_only
 
         if summary.get("ok"):
             if required:
@@ -272,11 +296,22 @@ def validate_one_case(
     case_ok = required_count > 0 and required_failures == 0 and valid_required_count == required_count
     result["case_ok"] = case_ok
 
-    cleanup_reason = (
-        "Reduced validation succeeded, but cleanup requires a later explicit eligibility phase."
-        if case_ok
-        else "Reduced validation failed. Cleanup is not allowed."
-    )
+    if legacy_reduced_only:
+        updated_validation["legacy"] = {
+            "schema_version": 1,
+            "legacy_reduced_only": True,
+            "raw_evidence_mode": "legacy_reduced_only",
+            "raw_evidence_ok": False,
+            "cleanup_allowed": False,
+            "updated_at": now_utc(),
+            "operation": OPERATION,
+            "reason": (
+                "Reduced outputs were validated for a legacy campaign without available raw diagnostic evidence. "
+                "No raw manifests were created and cleanup must remain disabled."
+            ),
+        }
+
+    cleanup_reason = _cleanup_reason(case_ok=case_ok, legacy_reduced_only=legacy_reduced_only)
     cleanup = updated_validation.setdefault("cleanup", {})
     if isinstance(cleanup, dict):
         cleanup["cleanup_allowed"] = False
@@ -294,15 +329,22 @@ def validate_one_case(
             {
                 "timestamp": now_utc(),
                 "operation": OPERATION,
+                "legacy_reduced_only": legacy_reduced_only,
                 "message": "Reduced validation succeeded." if case_ok else "Reduced validation failed.",
             }
         )
 
     if case_ok:
-        updated_state = reduced_validation_success_transition(state_doc)
+        if legacy_reduced_only:
+            updated_state = legacy_reduced_validation_success_transition(state_doc)
+        else:
+            updated_state = reduced_validation_success_transition(state_doc)
         result["target_state"] = "Reduced_validated"
     else:
-        updated_state = reduced_validation_failure_transition(state_doc)
+        if legacy_reduced_only:
+            updated_state = legacy_reduced_validation_failure_transition(state_doc)
+        else:
+            updated_state = reduced_validation_failure_transition(state_doc)
         result["target_state"] = "Validation_failed"
         result["errors"].append("one or more required reduced outputs failed validation")
 
@@ -370,6 +412,19 @@ def _validate_required_raw_evidence(config: dict[str, Any], validation_doc: dict
         errors.append("campaign.json must define at least one required raw diagnostic before reduced validation")
 
     return errors
+
+
+def _cleanup_reason(*, case_ok: bool, legacy_reduced_only: bool) -> str:
+    if legacy_reduced_only and case_ok:
+        return (
+            "Legacy reduced-only validation succeeded without raw diagnostic evidence. "
+            "Cleanup is not allowed."
+        )
+    if legacy_reduced_only:
+        return "Legacy reduced-only validation failed. Cleanup is not allowed."
+    if case_ok:
+        return "Reduced validation succeeded, but cleanup requires a later explicit eligibility phase."
+    return "Reduced validation failed. Cleanup is not allowed."
 
 
 if __name__ == "__main__":

@@ -117,6 +117,133 @@ class ReducedValidationTests(unittest.TestCase):
         self.assertEqual(state["state"], "Created")
         self.assertEqual(validation["reduced"], {})
 
+    def test_legacy_reduced_only_validates_created_case_without_raw_evidence(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._write_csv(case_dir, "post/fake_metrics.csv", "iteration,score\n0,1.5\n")
+
+        rc = validate_reduced_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--legacy-reduced-only",
+            ]
+        )
+
+        self.assertEqual(rc, 0)
+
+        state = read_json(case_dir / "state.json")
+        validation = read_json(case_dir / "validation.json")
+
+        self.assertEqual(state["state"], "Reduced_validated")
+        self.assertEqual(state["history"][-1]["operation"], "validate_reduced_case")
+        self.assertIn("legacy reduced-only", state["history"][-1]["reason"])
+
+        self.assertEqual(validation["raw"], {})
+        self.assertTrue(validation["reduced"]["fake_metrics"]["ok"])
+        self.assertTrue(validation["reduced"]["fake_metrics"]["legacy_reduced_only"])
+        self.assertEqual(validation["reduced"]["fake_metrics"]["row_count"], 1)
+
+        self.assertTrue(validation["legacy"]["legacy_reduced_only"])
+        self.assertEqual(validation["legacy"]["raw_evidence_mode"], "legacy_reduced_only")
+        self.assertFalse(validation["legacy"]["raw_evidence_ok"])
+        self.assertFalse(validation["legacy"]["cleanup_allowed"])
+
+        self.assertFalse(validation["cleanup"]["cleanup_allowed"])
+        self.assertIn("Legacy reduced-only", validation["cleanup"]["reason"])
+
+    def test_legacy_reduced_only_dry_run_does_not_write(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._write_csv(case_dir, "post/fake_metrics.csv", "iteration,score\n0,1.5\n")
+
+        rc = validate_reduced_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--legacy-reduced-only",
+                "--dry-run",
+            ]
+        )
+
+        self.assertEqual(rc, 0)
+
+        state = read_json(case_dir / "state.json")
+        validation = read_json(case_dir / "validation.json")
+
+        self.assertEqual(state["state"], "Created")
+        self.assertEqual(validation["raw"], {})
+        self.assertEqual(validation["reduced"], {})
+        self.assertNotIn("legacy", validation)
+        self.assertFalse(validation["cleanup"]["cleanup_allowed"])
+
+    def test_legacy_reduced_only_missing_required_csv_marks_validation_failed(self) -> None:
+        case_dir = self.root / "000_fake_case"
+
+        rc = validate_reduced_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--legacy-reduced-only",
+            ]
+        )
+
+        self.assertEqual(rc, 1)
+
+        state = read_json(case_dir / "state.json")
+        validation = read_json(case_dir / "validation.json")
+
+        self.assertEqual(state["state"], "Validation_failed")
+        self.assertEqual(validation["raw"], {})
+        self.assertFalse(validation["reduced"]["fake_metrics"]["ok"])
+        self.assertTrue(validation["reduced"]["fake_metrics"]["legacy_reduced_only"])
+
+        joined_errors = "\n".join(validation["reduced"]["fake_metrics"]["errors"])
+        self.assertIn("does not exist", joined_errors)
+
+        self.assertTrue(validation["legacy"]["legacy_reduced_only"])
+        self.assertFalse(validation["legacy"]["raw_evidence_ok"])
+        self.assertFalse(validation["cleanup"]["cleanup_allowed"])
+        self.assertIn("Legacy reduced-only validation failed", validation["cleanup"]["reason"])
+
+    def test_legacy_reduced_only_revalidates_existing_reduced_validated_case(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._write_csv(case_dir, "post/fake_metrics.csv", "iteration,score\n0,1.5\n")
+
+        rc_first = validate_reduced_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--legacy-reduced-only",
+            ]
+        )
+        self.assertEqual(rc_first, 0)
+
+        rc_second = validate_reduced_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--legacy-reduced-only",
+            ]
+        )
+        self.assertEqual(rc_second, 0)
+
+        state = read_json(case_dir / "state.json")
+        validation = read_json(case_dir / "validation.json")
+
+        self.assertEqual(state["state"], "Reduced_validated")
+        self.assertTrue(validation["reduced"]["fake_metrics"]["ok"])
+        self.assertTrue(validation["legacy"]["legacy_reduced_only"])
+        self.assertFalse(validation["cleanup"]["cleanup_allowed"])
+
     def test_missing_raw_validation_evidence_is_rejected_without_writing(self) -> None:
         case_dir = self.root / "000_fake_case"
         self._force_state(case_dir, "Raw_validated")
