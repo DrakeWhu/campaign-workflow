@@ -13,6 +13,15 @@ RAW_VALIDATION_COMPATIBLE_STATES = {
 }
 
 
+REDUCED_VALIDATION_COMPATIBLE_STATES = {
+    "Raw_validated",
+    "Analyzing",
+    "Analysis_failed",
+    "Reduced_validated",
+    "Validation_failed",
+}
+
+
 def state_name(state_doc: dict[str, Any]) -> str:
     state = state_doc.get("state")
     if not isinstance(state, str):
@@ -27,6 +36,13 @@ def ensure_raw_validation_compatible(state_doc: dict[str, Any]) -> None:
     if current not in RAW_VALIDATION_COMPATIBLE_STATES:
         allowed = ", ".join(sorted(RAW_VALIDATION_COMPATIBLE_STATES))
         raise ValueError(f"raw validation is not allowed from state {current!r}; allowed states: {allowed}")
+
+
+def ensure_reduced_validation_compatible(state_doc: dict[str, Any]) -> None:
+    current = state_name(state_doc)
+    if current not in REDUCED_VALIDATION_COMPATIBLE_STATES:
+        allowed = ", ".join(sorted(REDUCED_VALIDATION_COMPATIBLE_STATES))
+        raise ValueError(f"reduced validation is not allowed from state {current!r}; allowed states: {allowed}")
 
 
 def transition_state_document(
@@ -82,6 +98,27 @@ def raw_validation_failure_transition(state_doc: dict[str, Any]) -> dict[str, An
         operation="validate_raw_case",
         reason="raw diagnostic validation failed",
     )
+
+
+def reduced_validation_success_transition(state_doc: dict[str, Any]) -> dict[str, Any]:
+    ensure_reduced_validation_compatible(state_doc)
+    return transition_state_document(
+        state_doc,
+        to_state="Reduced_validated",
+        operation="validate_reduced_case",
+        reason="all required reduced outputs validated",
+    )
+
+
+def reduced_validation_failure_transition(state_doc: dict[str, Any]) -> dict[str, Any]:
+    ensure_reduced_validation_compatible(state_doc)
+    return transition_state_document(
+        state_doc,
+        to_state="Validation_failed",
+        operation="validate_reduced_case",
+        reason="reduced output validation failed",
+    )
+
 
 def mark_sim_done_transition(state_doc: dict[str, Any], *, reason: str) -> dict[str, Any]:
     current = state_name(state_doc)
