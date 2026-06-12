@@ -1470,19 +1470,343 @@ particle_analysis*/particle_summary.csv
 
 but they can be added later. Do not overfit Fase 4 to particle-analysis paths yet.
 
-## Next chat target
+## Completed Fase 4 — Generic reduced CSV validation
 
-Start from the updated handoff and the current repo ZIP.
+Fase 4 has been implemented, tested locally, deployed to SUNRISE, and validated on real campaign data.
 
-Goal for the next chat:
+Purpose:
 
 ```text
-Inspect the ZIP as source of truth.
-Confirm current code state.
-Implement Fase 4 generic reduced-output CSV validation in small auditable steps.
-Do not touch WarpX/PyWarpX inputs.
-Do not implement cleanup yet.
-Do not implement analysis adapter yet unless explicitly requested.
-Keep using unittest.
+Validate configured reduced outputs independently of analysis execution.
+Allow existing externally-generated reduced CSV outputs to be validated by the workflow.
+Keep the core generic and avoid baking guiding/capillary physics into the workflow.
 ```
 
+Implemented files:
+
+```text
+campaign_workflow/analysis/csv_contract.py
+campaign_workflow/cli/validate_reduced_case.py
+tests/test_reduced_validation.py
+```
+
+Updated file:
+
+```text
+campaign_workflow/core/transitions.py
+```
+
+Main command:
+
+```bash
+python -m campaign_workflow.cli.validate_reduced_case \
+  --campaign-root . \
+  --case-id 0 \
+  --dry-run \
+  --verbose
+```
+
+Normal reduced validation requires previous raw validation evidence. In the normal path, reduced validation is allowed only when raw diagnostics have already been validated and recorded in `validation.json`.
+
+Normal state flow:
+
+```text
+Raw_validated -> Reduced_validated
+```
+
+Failure state flow:
+
+```text
+Raw_validated -> Validation_failed
+```
+
+Reduced validation checks:
+
+```text
+- campaign.json analysis.outputs is present and non-empty
+- output kind is supported; currently csv
+- configured path is relative
+- output file exists
+- output path resolves inside CASE_DIR
+- symlink escapes are rejected
+- directories are rejected
+- file is non-empty
+- suffix matches allowed suffixes; default .csv
+- CSV is readable with Python stdlib csv
+- CSV has at least min_rows data rows
+- CSV contains required_columns if configured
+```
+
+Reduced validation writes evidence under:
+
+```text
+validation.json["reduced"][output_name]
+```
+
+Successful reduced validation does not authorize cleanup.
+
+Important invariant:
+
+```text
+Reduced_validated != raw safely deletable
+```
+
+Cleanup remains blocked after Fase 4:
+
+```json
+"cleanup": {
+  "cleanup_allowed": false,
+  "reason": "Reduced validation succeeded, but cleanup requires a later explicit eligibility phase."
+}
+```
+
+The first real normal-path validation was run on:
+
+```text
+/gpfs/home/jrodriguez/warpx_runs/capillaries_bo_top10_particles
+```
+
+Result:
+
+```text
+states: {'Reduced_validated': 10}
+guiding_metrics reduced ok: 10
+cleanup_allowed: 0
+```
+
+This campaign had real raw WarpX/openPMD HDF5 files previously validated under:
+
+```text
+diags/diag1/*.h5
+```
+
+and reduced outputs:
+
+```text
+guiding_metrics.csv
+```
+
+No raw files were deleted.
+
+No directories were deleted.
+
+No WarpX/PyWarpX inputs or physics parameters were modified.
+
+## Completed Fase 4b — Legacy reduced-only validation mode
+
+A legacy reduced-only mode has been implemented for old campaigns where reduced CSV outputs exist but raw diagnostics are no longer available.
+
+Main flag:
+
+```bash
+--legacy-reduced-only
+```
+
+Example command:
+
+```bash
+python -m campaign_workflow.cli.validate_reduced_case \
+  --campaign-root . \
+  --legacy-reduced-only \
+  --dry-run
+```
+
+Purpose:
+
+```text
+Adopt legacy campaigns into the workflow without falsifying raw validation evidence.
+Validate existing reduced CSV outputs even when raw WarpX/openPMD diagnostics have already been deleted or were not preserved.
+Keep cleanup permanently blocked for these legacy cases.
+```
+
+Legacy state flow:
+
+```text
+Created -> Reduced_validated
+```
+
+Failure state flow:
+
+```text
+Created -> Validation_failed
+```
+
+Allowed legacy revalidation states:
+
+```text
+Created
+Validation_failed
+Reduced_validated
+```
+
+Legacy mode explicitly does not:
+
+```text
+- validate raw diagnostics
+- create raw manifests
+- populate validation.json["raw"]
+- mark raw_evidence_ok=true
+- authorize cleanup
+- delete anything
+- modify WarpX/PyWarpX inputs
+- modify physics parameters
+```
+
+Legacy mode writes explicit evidence:
+
+```json
+"legacy": {
+  "schema_version": 1,
+  "legacy_reduced_only": true,
+  "raw_evidence_mode": "legacy_reduced_only",
+  "raw_evidence_ok": false,
+  "cleanup_allowed": false,
+  "operation": "validate_reduced_case",
+  "reason": "Reduced outputs were validated for a legacy campaign without available raw diagnostic evidence. No raw manifests were created and cleanup must remain disabled."
+}
+```
+
+Each reduced output summary also records:
+
+```json
+"legacy_reduced_only": true
+```
+
+Cleanup remains blocked:
+
+```json
+"cleanup": {
+  "cleanup_allowed": false,
+  "reason": "Legacy reduced-only validation succeeded without raw diagnostic evidence. Cleanup is not allowed."
+}
+```
+
+The first real legacy campaign validated with this mode was:
+
+```text
+/gpfs/home/jrodriguez/warpx_runs/capillaries_bo_full_campaign
+```
+
+This campaign is legacy because no raw diagnostics remain:
+
+```text
+diags/**/*.h5   -> 0 files
+diags/**/*.hdf5 -> 0 files
+diags/**/*.bp   -> 0 files
+diags/**/*.bp4  -> 0 files
+diags/**/*.bp5  -> 0 files
+```
+
+but reduced CSV outputs exist:
+
+```text
+guiding_metrics.csv
+```
+
+The campaign had:
+
+```text
+cases.tsv lines: 352
+header lines: 1
+real cases: 351
+CASE_ID range: 0..350
+```
+
+Auxiliary directories existed and were not part of `cases.tsv`:
+
+```text
+analysis_outputs
+array_logs
+dryrun_logs
+```
+
+The workflow processed only the cases listed in `cases.tsv`.
+
+Final result:
+
+```text
+states: {'Reduced_validated': 351}
+guiding_metrics reduced ok: 351
+legacy reduced-only: 351
+raw nonempty: 0
+cleanup_allowed: 0
+```
+
+This result means:
+
+```text
+The reduced CSVs are valid.
+The raw diagnostics are not validated.
+The campaign is adopted as legacy reduced-only.
+Cleanup remains impossible from this evidence.
+```
+
+This distinction is mandatory. Never convert a legacy reduced-only campaign into raw-validated state unless real raw diagnostics are available and pass raw validation.
+
+## Current recommended next phases
+
+The validation base is now strong enough to support several next directions.
+
+Recommended immediate documentation/maintenance step:
+
+```text
+Commit the Fase 4 and Fase 4b documentation updates.
+```
+
+Recommended next technical phases, in priority order:
+
+```text
+1. Fase 3 — Analysis adapter framework / Raw -> Reduced execution
+2. Fase 5 — Storage snapshot
+3. Tighten the guiding_metrics.csv contract with explicit required_columns
+4. Fase 6 — Cleanup dry-run
+```
+
+Recommended next phase:
+
+```text
+Fase 3 — Analysis adapter framework / Raw -> Reduced execution
+```
+
+Reason:
+
+```text
+The workflow can now validate reduced outputs, both normal and legacy.
+The missing piece in the normal production chain is the generic mechanism that calls a campaign-specific analysis module to transform validated raw diagnostics into configured reduced outputs.
+```
+
+The analysis adapter framework must remain generic.
+
+The core workflow may define:
+
+```text
+- adapter entrypoint contract
+- case-local execution
+- expected outputs
+- stdout/stderr/log capture
+- return code handling
+- analysis metadata
+- transition Raw_validated -> Analyzing -> analysis result
+```
+
+Campaign-specific adapters may know about:
+
+```text
+- guiding metrics
+- particle analysis
+- field diagnostics
+- triplets
+- future non-WarpX analysis modules
+```
+
+The first real adapter can wrap the existing guiding module, but the core must not become guiding-specific.
+
+Cleanup should still wait.
+
+Reason:
+
+```text
+Cleanup requires reduced validation, raw validation evidence, storage accounting, and manifest-driven dry-run/execute phases.
+The top10 campaign has raw evidence and reduced validation, but cleanup eligibility should still be introduced as a separate explicit phase.
+The full campaign is legacy reduced-only and must never become cleanup-eligible from its current evidence.
+```
