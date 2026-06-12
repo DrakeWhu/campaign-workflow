@@ -1030,18 +1030,459 @@ python -m unittest discover -s tests -p "test_*.py"
 
 Do not suggest pytest unless Juan explicitly asks.
 
-## Next recommended chat opening
+## Current status after SUNRISE deployment and real raw validation
 
-Start the next chat with:
-
-```text
-Seguimos desde este handoff. Fase 2a local está implementada y los tests pasan. Quiero decidir si hacemos Fase 2b con un HDF5 fake local o si pasamos ya a Fase 1b en SUNRISE con dry-run/check.
-```
-
-Recommended next step:
+Development is still done locally under Git and deployed to SUNRISE through Git. The working remote is:
 
 ```text
-Commit Fase 2a, then either:
-1. add a tiny local HDF5 smoke test for openpmd_hdf5, or
-2. deploy to SUNRISE through Git and run only dry-run/check commands first.
+git@github.com:DrakeWhu/campaign-workflow.git
 ```
+
+SUNRISE checkout:
+
+```text
+~/apps/src/campaign-workflow
+```
+
+The SUNRISE checkout should track `master`, not a detached tag. SUNRISE has an old Git without `git switch`; use:
+
+```bash
+cd ~/apps/src/campaign-workflow
+git fetch origin
+git checkout master
+git merge --ff-only origin/master
+```
+
+or, if supported:
+
+```bash
+git pull --ff-only origin master
+```
+
+For now, development happens directly on `master`. Tags/stable branches can be introduced later once the workflow is closer to production.
+
+## SUNRISE Python environment
+
+SUNRISE system Python is too old:
+
+```text
+/usr/bin/python3 -> Python 3.6.8
+```
+
+Modern Python appears only after loading GCC:
+
+```bash
+module purge
+module load GCC/12.1.0
+module load Python/3.10.12
+```
+
+Dedicated venv for this workflow:
+
+```text
+~/apps/venvs/campaign-workflow-py310
+```
+
+Activation helper:
+
+```text
+~/apps/env/campaign-workflow.sh
+```
+
+Expected activation pattern:
+
+```bash
+source ~/apps/env/campaign-workflow.sh
+```
+
+The working environment is:
+
+```text
+GCC/12.1.0 + Python/3.10.12 + ~/apps/venvs/campaign-workflow-py310
+```
+
+Important h5py installation note:
+
+A plain:
+
+```bash
+python -m pip install h5py
+```
+
+failed because it attempted to compile `h5py 3.16.0` against system HDF5 1.12.0, which is rejected by that h5py version.
+
+The working install was:
+
+```bash
+python -m pip uninstall -y h5py numpy
+python -m pip install --only-binary=:all: "numpy<2" "h5py==3.10.0"
+```
+
+The full repo test suite passed on SUNRISE:
+
+```bash
+cd ~/apps/src/campaign-workflow
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+Observed result after Fase 2b/1c:
+
+```text
+9 tests passed before Fase 1c.
+After adding mark_sim_done, the expected suite is larger; always rerun:
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+## Completed Fase 2b — local HDF5/openPMD smoke tests
+
+Implemented minimal HDF5 tests for the `openpmd_hdf5` branch.
+
+Purpose:
+
+```text
+Verify that openpmd_hdf5 validation works syntactically with h5py.
+Use tiny artificial HDF5 files.
+Do not require strict openPMD metadata yet.
+Do not use real WarpX data yet.
+```
+
+Expected/implemented checks:
+
+```text
+valid .h5 file opens with h5py -> Raw_validated
+valid .hdf5 file opens with h5py -> Raw_validated
+invalid .h5 payload -> Validation_failed
+non-HDF5 suffix -> Validation_failed
+skip cleanly if h5py is not installed
+```
+
+Implemented file:
+
+```text
+tests/test_raw_validation_hdf5.py
+```
+
+## Completed Fase 1b — SUNRISE deployment and state initialization
+
+A private GitHub repo was created and cloned on SUNRISE under:
+
+```text
+~/apps/src/campaign-workflow
+```
+
+The workflow was tested against the real campaign:
+
+```text
+/gpfs/home/jrodriguez/warpx_runs/capillaries_bo_top10_particles
+```
+
+This campaign has:
+
+```text
+cases.tsv
+10 case directories
+raw HDF5 files under diags/diag1/*.h5
+existing reduced CSVs such as guiding_metrics.csv and particle_summary.csv
+```
+
+A campaign-local `campaign.json` was created in:
+
+```text
+/gpfs/home/jrodriguez/warpx_runs/capillaries_bo_top10_particles/campaign.json
+```
+
+Important: this `campaign.json` is campaign-local runtime/config state. It is not a WarpX/PyWarpX input and does not modify physics parameters.
+
+For this campaign, the raw diagnostic contract is:
+
+```text
+name: fields_openpmd
+kind: openpmd_hdf5
+glob: diags/diag1/*.h5
+min_files: 1
+min_age_seconds: 600
+allowed_suffixes: .h5, .hdf5
+```
+
+State initialization was run on the 10 real cases:
+
+```bash
+python -m campaign_workflow.cli.init_case_states --campaign-root . --dry-run --verbose
+python -m campaign_workflow.cli.init_case_states --campaign-root . --verbose
+python -m campaign_workflow.cli.init_case_states --campaign-root . --check --verbose
+```
+
+Observed result:
+
+```text
+cases_processed=10
+cases_with_errors=0
+errors=0
+destructive_operations=0
+```
+
+After this phase, all cases had `state.json` and `validation.json` initialized and were in:
+
+```text
+Created
+```
+
+## Completed Fase 1c — simulation completion backfill
+
+Implemented CLI:
+
+```text
+campaign_workflow.cli.mark_sim_done
+```
+
+Purpose:
+
+```text
+Backfill Created -> Sim_done for campaigns that already exist and have evidence that simulation output was produced.
+```
+
+This command does not:
+
+```text
+open HDF5 files
+validate openPMD/HDF5
+run analysis
+authorize cleanup
+delete anything
+modify WarpX/PyWarpX inputs
+modify physics parameters
+```
+
+Completion evidence can be:
+
+```text
+simulation.completion_marker exists
+OR
+all required raw diagnostics have at least min_files matching configured globs
+```
+
+For the SUNRISE campaign, `post/sim_done.json` did not exist, so completion was inferred from the presence of required raw diagnostic files:
+
+```text
+diags/diag1/*.h5
+```
+
+Workflow used on SUNRISE:
+
+```bash
+python -m campaign_workflow.cli.mark_sim_done --campaign-root . --case-id 0 --dry-run --verbose
+python -m campaign_workflow.cli.mark_sim_done --campaign-root . --case-id 0 --verbose
+```
+
+Then the same command was used for the remaining 9 cases.
+
+After Fase 1c, all 10 cases were marked:
+
+```text
+Sim_done
+```
+
+before raw validation.
+
+## Completed Fase 2c — real SUNRISE raw validation against WarpX/openPMD HDF5
+
+Real raw validation was run on:
+
+```text
+/gpfs/home/jrodriguez/warpx_runs/capillaries_bo_top10_particles
+```
+
+First, case 0 was validated in dry-run:
+
+```bash
+python -m campaign_workflow.cli.validate_raw_case \
+  --campaign-root . \
+  --case-id 0 \
+  --dry-run \
+  --verbose
+```
+
+Observed result:
+
+```text
+case_ok=True
+target_state=Raw_validated
+DIAG: fields_openpmd kind=openpmd_hdf5 ok=True files=65 required=True
+errors=0
+destructive_operations=0
+```
+
+Then case 0 was validated in write mode. Its resulting state:
+
+```text
+Raw_validated
+```
+
+Its raw validation document showed:
+
+```text
+diagnostic_name: fields_openpmd
+diagnostic_kind: openpmd_hdf5
+ok: True
+glob: diags/diag1/*.h5
+file_count: 65
+total_size_bytes: 2864856800
+errors: []
+warnings: []
+manifest_path: manifests/raw_fields_openpmd.json
+cleanup.cleanup_allowed: false
+cleanup.reason: Raw validation alone does not authorize cleanup. Reduced validation is still required.
+```
+
+Its raw manifest showed:
+
+```text
+diagnostic: fields_openpmd
+kind: openpmd_hdf5
+files: 65
+destructive_operations: 0
+```
+
+The remaining 9 cases were then raw-validated. Current real campaign status:
+
+```text
+All 10 cases in capillaries_bo_top10_particles are Raw_validated.
+Raw manifests exist under each case's manifests/raw_fields_openpmd.json.
+Cleanup is still not allowed.
+No raw files have been deleted.
+No directories have been deleted.
+No WarpX/PyWarpX inputs or physics parameters were modified.
+```
+
+The current `openpmd_hdf5` validation remains intentionally minimal:
+
+```text
+path safety
+glob resolution
+file count
+suffix check
+regular file check
+inside CASE_DIR check
+symlink escape rejection
+non-empty file check
+minimum age check
+HDF5 open/readability check using h5py
+```
+
+Strict semantic openPMD validation is still not implemented. This can be added later with openPMD-specific tooling if needed, without changing the core workflow contract.
+
+## Current real state of first production campaign
+
+Campaign root:
+
+```text
+/gpfs/home/jrodriguez/warpx_runs/capillaries_bo_top10_particles
+```
+
+Current state:
+
+```text
+10/10 cases Raw_validated
+0 cleanup operations performed
+0 destructive operations performed
+```
+
+Important remaining invariant:
+
+```text
+Raw validation alone does not authorize cleanup.
+Reduced validation is still required before any raw deletion can become eligible.
+```
+
+## Recommended next phase
+
+The next recommended phase is not the analysis adapter yet.
+
+Because this campaign already has reduced CSV outputs produced externally, the next most useful step is:
+
+```text
+Fase 4 — generic reduced-output validation
+```
+
+Implement this before cleanup.
+
+Purpose:
+
+```text
+Validate existing reduced outputs independently of analysis execution.
+Allow Raw_validated -> Reduced_validated when configured reduced outputs already exist and pass a generic CSV contract.
+Keep this generic; do not bake guiding physics into the core.
+```
+
+Suggested new files:
+
+```text
+campaign_workflow/analysis/csv_contract.py
+campaign_workflow/cli/validate_reduced_case.py
+tests/test_reduced_validation.py
+```
+
+Initial reduced validation contract:
+
+```text
+Read campaign.json analysis.outputs.
+For each required output:
+  - ensure configured path is relative and inside CASE_DIR
+  - ensure file exists
+  - ensure regular file
+  - reject symlink escapes
+  - ensure suffix matches expected kind, e.g. .csv
+  - ensure non-empty
+  - parse CSV
+  - check min_rows
+  - check required_columns if configured
+Write validation.json["reduced"][output_name].
+Transition Raw_validated -> Reduced_validated if all required reduced outputs pass.
+Transition Raw_validated -> Analysis_failed or Validation_failed only if carefully justified; prefer a reduced-validation-specific failure state only if added deliberately.
+Keep cleanup.cleanup_allowed=false unless a later explicit eligibility phase sets it.
+```
+
+Potential state transition:
+
+```text
+Raw_validated -> Reduced_validated
+```
+
+This transition is useful because analysis was already run outside the workflow.
+
+For the current SUNRISE campaign, first reduced output to validate:
+
+```text
+guiding_metrics.csv
+```
+
+Configured path currently:
+
+```text
+guiding_metrics.csv
+```
+
+Particle outputs exist too, such as:
+
+```text
+particle_analysis*/particle_summary.csv
+```
+
+but they can be added later. Do not overfit Fase 4 to particle-analysis paths yet.
+
+## Next chat target
+
+Start from the updated handoff and the current repo ZIP.
+
+Goal for the next chat:
+
+```text
+Inspect the ZIP as source of truth.
+Confirm current code state.
+Implement Fase 4 generic reduced-output CSV validation in small auditable steps.
+Do not touch WarpX/PyWarpX inputs.
+Do not implement cleanup yet.
+Do not implement analysis adapter yet unless explicitly requested.
+Keep using unittest.
+```
+
