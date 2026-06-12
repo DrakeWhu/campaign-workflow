@@ -82,3 +82,14 @@ def raw_validation_failure_transition(state_doc: dict[str, Any]) -> dict[str, An
         operation="validate_raw_case",
         reason="raw diagnostic validation failed",
     )
+
+def mark_sim_done_transition(state_doc: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    current = state_name(state_doc)
+    if current != "Created":
+        raise ValueError(f"mark_sim_done is not allowed from state {current!r}; allowed state: Created")
+    return transition_state_document(
+        state_doc,
+        to_state="Sim_done",
+        operation="mark_sim_done",
+        reason=reason,
+    )
