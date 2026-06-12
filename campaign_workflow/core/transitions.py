@@ -22,6 +22,13 @@ REDUCED_VALIDATION_COMPATIBLE_STATES = {
 }
 
 
+LEGACY_REDUCED_VALIDATION_COMPATIBLE_STATES = {
+    "Created",
+    "Validation_failed",
+    "Reduced_validated",
+}
+
+
 def state_name(state_doc: dict[str, Any]) -> str:
     state = state_doc.get("state")
     if not isinstance(state, str):
@@ -43,6 +50,15 @@ def ensure_reduced_validation_compatible(state_doc: dict[str, Any]) -> None:
     if current not in REDUCED_VALIDATION_COMPATIBLE_STATES:
         allowed = ", ".join(sorted(REDUCED_VALIDATION_COMPATIBLE_STATES))
         raise ValueError(f"reduced validation is not allowed from state {current!r}; allowed states: {allowed}")
+
+
+def ensure_legacy_reduced_validation_compatible(state_doc: dict[str, Any]) -> None:
+    current = state_name(state_doc)
+    if current not in LEGACY_REDUCED_VALIDATION_COMPATIBLE_STATES:
+        allowed = ", ".join(sorted(LEGACY_REDUCED_VALIDATION_COMPATIBLE_STATES))
+        raise ValueError(
+            f"legacy reduced-only validation is not allowed from state {current!r}; allowed states: {allowed}"
+        )
 
 
 def transition_state_document(
@@ -117,6 +133,26 @@ def reduced_validation_failure_transition(state_doc: dict[str, Any]) -> dict[str
         to_state="Validation_failed",
         operation="validate_reduced_case",
         reason="reduced output validation failed",
+    )
+
+
+def legacy_reduced_validation_success_transition(state_doc: dict[str, Any]) -> dict[str, Any]:
+    ensure_legacy_reduced_validation_compatible(state_doc)
+    return transition_state_document(
+        state_doc,
+        to_state="Reduced_validated",
+        operation="validate_reduced_case",
+        reason="legacy reduced-only outputs validated without raw diagnostic evidence",
+    )
+
+
+def legacy_reduced_validation_failure_transition(state_doc: dict[str, Any]) -> dict[str, Any]:
+    ensure_legacy_reduced_validation_compatible(state_doc)
+    return transition_state_document(
+        state_doc,
+        to_state="Validation_failed",
+        operation="validate_reduced_case",
+        reason="legacy reduced-only output validation failed",
     )
 
 
