@@ -45,3 +45,8 @@ checkpoints/
 # Local scratch
 scratch/
 tmp/
+
+# Files
+
+*.zip
+*.tar.gz
