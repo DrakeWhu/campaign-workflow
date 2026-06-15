@@ -1810,3 +1810,494 @@ Cleanup requires reduced validation, raw validation evidence, storage accounting
 The top10 campaign has raw evidence and reduced validation, but cleanup eligibility should still be introduced as a separate explicit phase.
 The full campaign is legacy reduced-only and must never become cleanup-eligible from its current evidence.
 ```
+
+## Current status after storage and cleanup-manifest phases
+
+The workflow has now completed the storage accounting and cleanup-manifest base on the real SUNRISE campaign:
+
+```text
+/gpfs/home/jrodriguez/warpx_runs/capillaries_bo_top10_particles
+```
+
+This campaign remains the only small real campaign on SUNRISE with preserved raw HDF5 diagnostics. It has:
+
+```text
+10 cases
+fields diagnostic stored under diags/diag1/*.h5
+particle diagnostic stored under diags/electron_particles
+validated reduced outputs such as guiding_metrics.csv
+```
+
+The logical naming decision for future campaigns is:
+
+```text
+fields              -> field diagnostics
+plasma_electrons    -> pre-existing / plasma electron particle diagnostics
+ionized_electrons   -> electrons created by ionization
+```
+
+For the legacy/current `top10_particles` campaign, the physical fields directory is still called:
+
+```text
+diags/diag1
+```
+
+Do not rename existing directories in this campaign. Use logical names in `campaign.json` and keep paths pointing to the real legacy layout.
+
+## Completed Fase 5 — Storage snapshot
+
+Implemented:
+
+```text
+campaign_workflow/core/storage.py
+campaign_workflow/cli/storage_snapshot.py
+tests/test_storage_snapshot.py
+```
+
+Purpose:
+
+```text
+Compute campaign-level and case-level storage accounting without modifying raw data.
+```
+
+The command was run on SUNRISE:
+
+```bash
+python -m campaign_workflow.cli.storage_snapshot \
+  --campaign-root . \
+  --dry-run \
+  --verbose
+
+python -m campaign_workflow.cli.storage_snapshot \
+  --campaign-root . \
+  --verbose
+```
+
+Observed real campaign result:
+
+```text
+campaign_name=capillaries_bo_top10_particles
+case_count=10
+validated_cases=10
+submitted_cases=10
+case_total_GB=39.808848
+raw_live_GB=36.532526
+safe_cleanup_candidate_GB=36.532526
+raw_delete_eligible_GB=0.0
+raw_deleted_GB=0.0
+avg_raw_per_case_GB=3.653253
+cases_by_state={'Reduced_validated': 10}
+errors=0
+destructive_operations=0
+```
+
+Snapshot written to:
+
+```text
+snapshots/storage_snapshot_latest.json
+```
+
+Interpretation:
+
+```text
+All 10 cases had both raw and reduced validation evidence.
+The raw HDF5 files are cleanup candidates from an evidence perspective.
+No case was yet explicitly eligible for deletion at that point.
+No files were deleted.
+```
+
+## Completed Fase 5b — Raw delete eligibility
+
+Implemented:
+
+```text
+campaign_workflow.cli.mark_raw_delete_eligible
+tests/test_raw_delete_eligibility.py
+```
+
+Purpose:
+
+```text
+Move cases from Reduced_validated to Raw_delete_eligible only after rechecking raw validation evidence, reduced validation evidence, legacy status, cleanup globs, and candidate raw files.
+```
+
+This command does not delete anything and does not create the final delete manifest.
+
+It writes:
+
+```text
+post/raw_delete_eligible.json
+validation.json cleanup eligibility evidence
+state.json transition to Raw_delete_eligible
+```
+
+The command was run on SUNRISE:
+
+```bash
+python -m campaign_workflow.cli.mark_raw_delete_eligible \
+  --campaign-root . \
+  --dry-run \
+  --verbose
+
+python -m campaign_workflow.cli.mark_raw_delete_eligible \
+  --campaign-root . \
+  --verbose
+```
+
+Observed result:
+
+```text
+cases_processed=10
+cases_ok=10
+cases_with_errors=0
+errors=0
+mode=write
+destructive_operations=0
+```
+
+Current real campaign state after this phase:
+
+```text
+10/10 cases are Raw_delete_eligible
+cleanup_allowed=True in validation.json for those cases
+post/raw_delete_eligible.json exists for those cases
+No raw files were deleted
+No directories were deleted
+```
+
+Important distinction:
+
+```text
+Raw_delete_eligible means cleanup dry-run may be created.
+It does not mean raw files should be deleted immediately.
+Deletion still requires a dry-run manifest and explicit execute phase.
+```
+
+## Completed Fase 6 — Cleanup dry-run manifests
+
+Implemented/updated:
+
+```text
+campaign_workflow/cli/cleanup_raw_case.py
+tests/test_cleanup_raw_dry_run.py
+```
+
+Dry-run command:
+
+```bash
+python -m campaign_workflow.cli.cleanup_raw_case \
+  --campaign-root . \
+  --dry-run \
+  --verbose
+```
+
+Purpose:
+
+```text
+Resolve cleanup globs, revalidate state/evidence/path safety, and write exact dry-run manifests.
+Do not delete anything.
+```
+
+The command was first tested on case 0:
+
+```text
+case_ok=True
+state=Raw_delete_eligible
+manifest_type=raw_cleanup_dry_run
+file_count=65
+total_size_GB=2.668106
+destructive_operations=0
+first file=diags/diag1/openpmd_000000.h5
+last file=diags/diag1/openpmd_256000.h5
+```
+
+A direct `find` check confirmed that the 65 HDF5 files still existed after dry-run.
+
+Then the command was run over all 10 cases.
+
+Observed result:
+
+```text
+cases_processed=10
+cases_ok=10
+cases_with_errors=0
+errors=0
+manifest_files=890
+manifest_bytes=39226500800
+manifest_GB=36.532526
+mode=dry-run-manifest
+destructive_operations=0
+```
+
+Each case now has:
+
+```text
+manifests/raw_delete_manifest.json
+validation.json cleanup.delete_manifest_ready=True
+```
+
+No raw files were deleted.
+
+## Implemented locally but not executed on SUNRISE — Fase 7 cleanup execute
+
+`campaign_workflow.cli.cleanup_raw_case` was extended locally to support:
+
+```bash
+python -m campaign_workflow.cli.cleanup_raw_case \
+  --campaign-root . \
+  --case-id <ID> \
+  --execute \
+  --verbose
+```
+
+Purpose:
+
+```text
+Delete only files listed in the validated dry-run manifest.
+Do not reinterpret globs.
+Do not delete directories.
+Do not delete outside CASE_DIR.
+Write post/raw_deleted.json.
+Update validation.json.
+Transition Raw_delete_eligible -> Raw_deleted.
+```
+
+A local unittest issue was fixed because argparse's required mutually exclusive mode group raised `SystemExit(2)` before `main()` could return a code. The fix was to wrap `parse_args` inside `main()`:
+
+```python
+try:
+    args = build_parser().parse_args(argv)
+except SystemExit as exc:
+    if isinstance(exc.code, int):
+        return exc.code
+    return 2
+```
+
+After that fix, the full local suite passed:
+
+```text
+Ran 54 tests
+OK, with expected skipped tests depending on platform symlink permissions
+```
+
+Important decision:
+
+```text
+Do NOT execute cleanup on top10_particles for now.
+```
+
+Reason:
+
+```text
+The top10_particles campaign is currently the only small real preserved raw-HDF5 corpus on SUNRISE.
+The quota is 1 TB and there is no immediate pressure to free ~36.5 GB.
+These raw files are useful for testing real analysis integration, multi-diagnostic contracts, stricter openPMD validation, storage snapshots, and future cleanup execution.
+```
+
+Therefore:
+
+```text
+cleanup --execute exists in code/tests but has intentionally not been run on SUNRISE.
+top10_particles raw HDF5 files should be preserved until a replacement raw corpus exists.
+```
+
+## Current real state of top10_particles
+
+Campaign:
+
+```text
+/gpfs/home/jrodriguez/warpx_runs/capillaries_bo_top10_particles
+```
+
+Current intended state:
+
+```text
+10/10 cases Raw_delete_eligible
+10/10 cases have dry-run cleanup manifests
+0 raw files deleted
+0 directories deleted
+cleanup execute intentionally not run
+```
+
+Expected preserved raw data:
+
+```text
+diags/diag1/*.h5 still present
+diags/electron_particles still present
+```
+
+Current cleanup target in this campaign is expected to cover only the configured cleanup globs, currently the fields HDF5 under:
+
+```text
+diags/diag1/*.h5
+```
+
+Do not assume particle diagnostics are included in cleanup unless `campaign.json` explicitly includes them.
+
+## Immediate next direction
+
+The next major technical direction is:
+
+```text
+Simulation and analysis integration.
+```
+
+Do not start by inventing large SLURM submitters.
+
+Recommended next order:
+
+```text
+1. Commit current storage/eligibility/cleanup code and this handoff.
+2. Keep top10_particles raw HDF5 files.
+3. Integrate the real analysis module as an external command adapter.
+4. Define simulation lifecycle evidence before writing SLURM wrappers.
+5. Only then prepare a small new ionization campaign.
+```
+
+## Next phase — real analysis integration
+
+Goal:
+
+```text
+Use campaign_workflow to invoke the existing guiding/particle analysis module without merging virtual environments.
+```
+
+Relevant existing environments on SUNRISE:
+
+```text
+~/apps/venvs/campaign-workflow-py310
+~/apps/venvs/guiding-analysis-py310
+~/apps/venvs/warpx-26.05-py314
+```
+
+Design rule:
+
+```text
+campaign-workflow-py310 orchestrates state, validation, manifests, storage, and cleanup.
+guiding-analysis-py310 performs analysis.
+warpx-26.05-py314 runs PyWarpX/WarpX simulations.
+```
+
+Do not import the guiding-analysis package directly into campaign-workflow unless deliberately refactored later. Prefer subprocess/command adapter.
+
+Expected next required input from Juan:
+
+```text
+The exact existing command or script currently used on SUNRISE to run guiding/particle analysis for one campaign or one case.
+```
+
+The workflow should then:
+
+```text
+source/activate the appropriate analysis environment externally if needed
+run the existing analysis command from campaign_workflow.cli.analyze_case
+capture stdout/stderr
+write logs
+validate configured reduced outputs
+update validation.json
+move Raw_validated/Raw_delete_eligible-compatible cases through the analysis path only after a deliberate state policy decision
+```
+
+Because top10_particles is already Raw_delete_eligible, the analysis re-run policy needs care. Options:
+
+```text
+Option A: analyze only from Raw_validated / Analysis_failed and use a fresh new campaign for full raw->analysis tests.
+Option B: allow analysis re-run from Raw_delete_eligible if raw files are still present and cleanup has not been executed.
+```
+
+Prefer Option B only if implemented explicitly with tests.
+
+## Next phase — simulation lifecycle contract
+
+Before adding SLURM wrappers, define the generic simulation evidence contract.
+
+Needed concepts:
+
+```text
+Submitted
+Running
+Sim_done
+Failed
+Retryable
+post/sim_submitted.json
+post/sim_running.json or logs/sim_runtime.json
+post/sim_done.json
+post/sim_failed.json
+scheduler_job_id
+submit_command
+run_command
+environment_name
+started_at
+finished_at
+return_code
+stdout/stderr log paths
+```
+
+The workflow must not edit PyWarpX input templates unless explicitly requested.
+
+The simulation backend should be external-command based at first:
+
+```text
+campaign_workflow runs or wraps a configured command
+the PyWarpX/simulation module remains separate
+SLURM remains a backend, not the whole architecture
+```
+
+Before writing SLURM wrappers, ask Juan for the existing working SUNRISE SLURM/PyWarpX submitter files. Do not invent operational HPC submitters blindly.
+
+## Planned small ionization campaign after analysis/simulation integration
+
+After the stack can launch or adopt simulations and run analysis, prepare a small campaign:
+
+```text
+~20 cases
+two gas-mixture families
+fields diagnostic
+plasma_electrons diagnostic
+ionized_electrons diagnostic
+possibly ion diagnostics if needed
+limited dumps
+full workflow validation
+storage snapshot
+cleanup dry-run
+```
+
+The goal of this campaign is not optimization yet. It is an integration test for:
+
+```text
+multi-diagnostic raw contracts
+ionized electron species
+particle diagnostics
+analysis adapter
+quota/storage accounting
+cleanup manifests
+```
+
+Only after this small campaign works should the large/massive campaign be considered.
+
+## Commit recommendation
+
+After updating the handoff:
+
+```powershell
+git status
+python -m unittest discover -s tests -p "test_*.py"
+git add campaign_workflow tests docs\NEXT_CHAT_HANDOFF.md
+git commit -m "Add storage accounting and cleanup manifest workflow"
+git log --oneline -5
+```
+
+On SUNRISE, update with the existing old-Git-compatible workflow:
+
+```bash
+cd ~/apps/src/campaign-workflow
+git fetch origin
+git checkout master
+git merge --ff-only origin/master
+```
+
+or, if supported:
+
+```bash
+git pull --ff-only origin master
+```
