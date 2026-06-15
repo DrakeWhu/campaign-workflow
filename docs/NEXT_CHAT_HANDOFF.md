@@ -216,6 +216,8 @@ storage snapshot
 raw delete eligibility
 cleanup dry-run manifest
 cleanup execute local/tests
+fake full workflow integration test from simulation markers to cleanup execute
+thin case-local SUNRISE WarpX runner wrapper
 ```
 
 Cleanup execute exists in code/tests but has intentionally not been run on the real `top10_particles` campaign.
@@ -287,10 +289,11 @@ Standard test command:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Latest local suite result after simulation marker work:
+Latest local suite result after the fake full workflow integration test and
+case-local SUNRISE WarpX runner work:
 
 ```text
-Ran 75 tests
+Ran 80 tests
 OK
 ```
 
@@ -401,72 +404,260 @@ CASE_DIR/manifests/
 
 The current `top10_particles` campaign should not be used for destructive cleanup. It remains the preserved real raw-HDF5 corpus.
 
+## Current execution philosophy
+
+The previous handoff described the next step as a thin simulation wrapper plus a
+thin SLURM array wrapper, with raw validation, analysis, reduced validation, and
+cleanup left as separate later jobs.
+
+That has been refined.
+
+The current production direction is a managed case-local cycle:
+
+```text
+case-local SLURM array task
+  -> mark_sim_submitted
+  -> mark_sim_running
+  -> run external WarpX/PyWarpX simulation
+  -> mark_sim_done or mark_sim_failed
+  -> validate_raw_case
+  -> analyze_case
+  -> mark_raw_delete_eligible
+  -> cleanup_raw_case --dry-run
+  -> optionally cleanup_raw_case --execute
+```
+
+The phase boundaries remain explicit and transactional, but they do not have to
+map to separate SLURM jobs when the later phases are cheap compared with the
+simulation.
+
+The reason is practical:
+
+* WarpX/PyWarpX simulation dominates walltime.
+* Raw validation, analysis/reduced validation, cleanup eligibility, and cleanup
+  dry-run are expected to be much shorter for the current campaign class.
+* Launching a separate SLURM array for every cheap case-local phase adds
+  unnecessary scheduler overhead.
+* A resident parent orchestrator is explicitly not wanted.
+
+There must still be no parent job sitting idle in a long partition. No job should
+live in T48H just to wait, poll, or coordinate. The longest job should normally
+be the simulation/case-cycle array task, typically in T6H or T12H depending on
+the campaign.
+
+A short launcher that submits a job and exits is acceptable. A resident
+controller is not.
+
+## Case-local cycle responsibilities
+
+The case-local cycle wrapper should:
+
+```text
+1. select CASE_ID / CASE_NAME from cases.tsv using SLURM_ARRAY_TASK_ID
+2. use campaign-workflow-py310 for workflow CLIs
+3. call mark_sim_submitted
+4. call mark_sim_running
+5. delegate simulation to examples/sunrise/run_warpx_case_sunrise.sh
+6. if simulation fails, call mark_sim_failed and stop that case
+7. if simulation succeeds, call mark_sim_done
+8. call validate_raw_case
+9. call analyze_case
+10. call mark_raw_delete_eligible
+11. call cleanup_raw_case --dry-run
+12. optionally call cleanup_raw_case --execute only with explicit confirmation
+```
+
+The wrapper must keep logs readable and phase-separated.
+
+It must not:
+
+```text
+edit WarpX/PyWarpX physics inputs
+hard-code capillary/guiding/ionization physics
+run BO/MORBO logic
+delete anything except through campaign_workflow.cli.cleanup_raw_case --execute
+run cleanup execute without explicit confirmation
+use rm -rf
+delete directories
+delete files outside CASE_DIR
+```
+
+Simulation completion alone still never authorizes cleanup. Cleanup remains safe
+only after:
+
+```text
+raw validation
+reduced validation
+raw delete eligibility
+cleanup dry-run manifest
+explicit cleanup execute confirmation
+```
+
+## Campaign-wide jobs
+
+Some operations remain campaign-wide because they are intrinsically global:
+
+```text
+storage_snapshot
+optimizer_tick
+objective aggregation
+candidate proposal
+campaign summary reports
+```
+
+For future BO/MORBO workflows, the optimizer tick is expected to run globally
+after one or more case-local cycles have produced validated reduced outputs.
+
+The optimizer tick may:
+
+```text
+read validated reduced outputs
+build observations
+decide whether enough new data exists
+compute objectives/scores
+propose new candidates
+submit or prepare a new candidate batch
+```
+
+The optimizer tick must not become a resident daemon.
+
+## Implemented SUNRISE script status
+
+Already implemented and committed:
+
+```text
+examples/sunrise/run_warpx_case_sunrise.sh
+```
+
+This is the case-local WarpX/PyWarpX runner based on the real SUNRISE
+`submit_top10_particles_array.sh` pattern.
+
+It does:
+
+```text
+cd CASE_DIR
+source case.env
+mkdir -p logs diags checkpoints post
+skip if existing HDF5 diagnostics are found
+load warpx-26.05-py314 environment
+run CAP_DRY_RUN=1 python input.py 2
+run srun -n "$SLURM_NTASKS" python input.py 2
+write case-local logs/run_info
+```
+
+It does not call workflow validation, analysis, cleanup, optimizer logic, or edit
+physics inputs.
+
+Also implemented and tested:
+
+```text
+fake full workflow integration test from simulation markers to cleanup execute
+```
+
+Latest known local result:
+
+```text
+Ran 80 tests
+OK
+```
+
 ## Next immediate task
 
-The next task is to integrate the simulation marker CLIs into a thin SUNRISE execution path without turning SLURM into the workflow core.
+Adapt the SUNRISE SLURM scripts minimally to the new case-local cycle philosophy.
 
-Do not start by launching a full production campaign.
-
-Recommended next step:
+The next main implementation target is:
 
 ```text
-Design a thin case-local WarpX runner wrapper plus a thin SLURM array wrapper.
+examples/sunrise/submit_case_cycle_array.sh
 ```
 
-The intended split is:
+or an equivalent name.
+
+It should wrap one full case-local cycle:
 
 ```text
-SLURM array selector:
-  - choose CASE_ID / CASE_NAME from cases.tsv
-  - call workflow marker CLIs from campaign-workflow-py310 where appropriate
-  - delegate execution to case-local runner
-
-case-local WarpX runner:
-  - cd CASE_DIR
-  - source case.env
-  - load warpx-26.05-py314 environment
-  - run CAP_DRY_RUN=1 python input.py 2
-  - run srun -n "$SLURM_NTASKS" python input.py 2
-  - keep raw outputs and logs inside CASE_DIR
+Created
+-> Submitted
+-> Running
+-> Sim_done / Failed
+-> Raw_validated / Validation_failed
+-> Reduced_validated / Analysis_failed
+-> Raw_delete_eligible
+-> cleanup dry-run manifest
+-> optional Raw_deleted
 ```
 
-The wrappers should be thin. No raw validation, analysis, reduced validation, cleanup, optimizer logic, or physics logic belongs inside the SLURM script.
+The first implementation should not include optimizer/MORBO logic.
 
-The first operational target should be a disposable or very small integration campaign, not `top10_particles` cleanup.
-
-## Next workflow goal
-
-The desired complete integration path is:
+The first implementation should include static `unittest` coverage checking that
+the script:
 
 ```text
-init_case_states
--> mark_sim_submitted
--> mark_sim_running
--> run WarpX/PyWarpX externally
--> mark_sim_done or mark_sim_failed
--> validate_raw_case
--> analyze_case
--> validate_reduced_case if needed
--> storage_snapshot
--> mark_raw_delete_eligible
--> cleanup_raw_case --dry-run
--> cleanup_raw_case --execute
+exists
+uses bash strict mode
+selects CASE_ID / CASE_NAME from cases.tsv
+calls mark_sim_submitted
+calls mark_sim_running
+calls mark_sim_done
+calls mark_sim_failed
+delegates simulation to run_warpx_case_sunrise.sh
+calls validate_raw_case
+calls analyze_case
+calls mark_raw_delete_eligible
+calls cleanup_raw_case --dry-run
+only calls cleanup_raw_case --execute behind explicit confirmation
+does not contain rm -rf
+does not run optimizer/MORBO
+does not edit physics inputs
+does not mix guiding-analysis-py310 into the workflow layer
 ```
 
-Cleanup execute should only be tested on a disposable/small integration campaign, not on `top10_particles`.
+## Real campaign direction
+
+The next real campaign should be the campaign Juan actually wants to run, not a
+toy campaign created only for testing.
+
+Juan will prepare:
+
+```text
+WarpX/PyWarpX input template
+case list / cases.tsv
+case.env files
+campaign.json
+diagnostics contract
+updated guiding/particle/ionization analysis module if needed
+```
+
+The workflow side should ensure:
+
+```text
+state initialization
+case-local cycle execution
+raw validation
+external analysis invocation
+reduced output validation
+safe cleanup eligibility
+cleanup dry-run manifest
+optional cleanup execute
+clear logs and evidence for failures
+```
+
+The existing `top10_particles` campaign remains useful as a preserved real raw
+HDF5 corpus, but should still not be used for destructive cleanup unless Juan
+explicitly decides otherwise.
 
 ## Not yet done
 
 Still not implemented:
 
 ```text
-thin SUNRISE simulation wrapper
-thin SLURM array wrapper using simulation marker CLIs
-fake end-to-end full campaign test from simulation to cleanup
-real disposable SUNRISE integration campaign
+managed case-local SLURM cycle wrapper
+static tests for managed case-local SLURM cycle wrapper
+real campaign launch using the managed case-local cycle
 retry policy Failed -> Retryable -> Submitted
 scheduler polling
-automatic job submission from optimizer
+optimizer tick
+automatic candidate proposal/submission
 MORBO/BO integration
 ionization campaign
 ```
@@ -479,44 +670,28 @@ First inspect:
 
 ```text
 docs/SIMULATION_MODULE_CONTRACT.md
+docs/NEXT_CHAT_HANDOFF.md
 campaign_workflow/cli/mark_sim_submitted.py
 campaign_workflow/cli/mark_sim_running.py
 campaign_workflow/cli/mark_sim_failed.py
 campaign_workflow/cli/mark_sim_done.py
-campaign_workflow/simulation/
-tests/test_simulation_lifecycle.py
-tests/test_simulation_marker_clis.py
-tests/test_mark_sim_done.py
+campaign_workflow/cli/validate_raw_case.py
+campaign_workflow/cli/analyze_case.py
+campaign_workflow/cli/mark_raw_delete_eligible.py
+campaign_workflow/cli/cleanup_raw_case.py
+examples/sunrise/run_warpx_case_sunrise.sh
+tests/test_full_fake_workflow.py
+tests/test_sunrise_warpx_runner_script.py
 ```
 
-Then propose the smallest safe integration step.
+Then propose the smallest safe implementation of the managed case-local SLURM
+cycle wrapper.
 
-Expected next implementation options:
+Do not implement a parent orchestrator.
 
-```text
-A. Add a fake full workflow integration test from simulation markers to cleanup.
-B. Add a thin case-local SUNRISE WarpX runner wrapper, based on the real submit_top10_particles_array.sh.
-C. Add a thin SLURM array wrapper that calls lifecycle marker CLIs.
-```
+Do not implement a campaign-wide optimizer tick yet.
 
-Do not choose B or C without preserving the existing working SUNRISE behavior and keeping wrappers visible/auditable.
+Do not modify WarpX/PyWarpX physics inputs.
 
-
-## Later integration campaign
-
-Only after analysis and simulation integration are stable, prepare a small ionization integration campaign:
-
-```text
-~20 cases
-two gas-mixture families
-fields diagnostic
-plasma_electrons diagnostic
-ionized_electrons diagnostic
-possibly ion diagnostics if needed
-limited dumps
-full workflow validation
-storage snapshot
-cleanup dry-run
-```
-
-Goal: integration test, not optimization yet.
+Do not prepare the ionization campaign inside `campaign-workflow`; Juan will
+prepare the physical input/template and case definitions separately.

@@ -1883,3 +1883,80 @@ Goal:
 integration test
 not optimization yet
 ```
+
+## Phase D — Managed case-local cycle execution philosophy
+
+The execution philosophy was refined before implementing the SUNRISE production
+wrappers.
+
+Earlier documentation described simulation, raw validation, analysis, reduced
+validation, cleanup, and future optimization as separate jobs. This remains true
+at the semantic/workflow level, but it is no longer required that each phase maps
+to a separate SLURM job.
+
+Reason:
+
+* WarpX/PyWarpX simulation dominates walltime.
+* Raw validation, analysis/reduced validation, cleanup eligibility, and cleanup
+  dry-run are usually short compared with simulation.
+* Submitting a new SLURM array for every cheap case-local phase adds avoidable
+  scheduler overhead.
+* A resident parent orchestrator is explicitly not wanted.
+
+New preferred production model:
+
+```text
+case-local SLURM array task
+  -> mark_sim_submitted
+  -> mark_sim_running
+  -> run external WarpX/PyWarpX simulation
+  -> mark_sim_done or mark_sim_failed
+  -> validate_raw_case
+  -> analyze_case
+  -> mark_raw_delete_eligible
+  -> cleanup_raw_case --dry-run
+  -> optional cleanup_raw_case --execute
+```
+
+The phase boundaries remain explicit:
+
+* each phase writes evidence;
+* each phase has inspectable logs;
+* failures stop the remaining phases for that case;
+* raw validation is still required after simulation;
+* reduced-output validation is still required after analysis;
+* cleanup eligibility remains explicit;
+* cleanup dry-run must create a manifest before deletion;
+* cleanup execute must require explicit confirmation;
+* simulation completion alone never authorizes cleanup.
+
+There is still no parent orchestrator:
+
+* no resident daemon;
+* no long-walltime job waiting or polling;
+* no global controller sitting idle in T48H.
+
+Campaign-wide operations remain separate jobs because they are intrinsically
+global:
+
+```text
+storage_snapshot
+optimizer_tick
+objective aggregation
+candidate proposal
+campaign summaries
+```
+
+For BO/MORBO, the optimizer tick is expected to be campaign-wide because it
+operates on validated reduced outputs across many cases. It may propose or submit
+new candidates, but it must not become a resident daemon.
+
+The next implementation target after this decision is a managed case-local
+SUNRISE SLURM wrapper, tentatively:
+
+```text
+examples/sunrise/submit_case_cycle_array.sh
+```
+
+This wrapper should execute one full case-local cycle and must not include
+optimizer/MORBO logic or edit WarpX/PyWarpX physics inputs.

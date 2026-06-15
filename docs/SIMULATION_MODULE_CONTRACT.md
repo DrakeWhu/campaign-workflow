@@ -346,17 +346,34 @@ changing to the simulation environment.
 
 SLURM is an execution backend, not the architecture.
 
-A SLURM script should be a thin wrapper that:
+A SLURM script should be a thin wrapper around one case or one case-local cycle.
 
-- selects one case;
-- enters the case directory;
-- prepares logs;
-- loads the simulation environment;
-- optionally runs a preflight;
-- runs the simulation command;
-- records success or failure evidence.
+For a simulation-only wrapper, the script should:
 
-Core workflow logic must not live inside SLURM scripts.
+- select one case;
+- enter the case directory;
+- prepare logs;
+- load the simulation environment;
+- optionally run a preflight;
+- run the simulation command;
+- record success or failure evidence.
+
+For a managed case-cycle wrapper, the script may also call workflow CLIs for
+later case-local phases after the simulation succeeds:
+
+```text
+mark_sim_done
+validate_raw_case
+analyze_case
+mark_raw_delete_eligible
+cleanup_raw_case --dry-run
+optional cleanup_raw_case --execute
+```
+
+This is allowed only if each phase remains explicit, logged, and transactional.
+
+Core physics logic must not live inside SLURM scripts. Campaign-wide optimizer
+logic must not live inside case-local SLURM scripts.
 
 The workflow should support non-SLURM execution later, for example local shell,
 direct subprocess execution, or experimental-control computers.
@@ -392,6 +409,61 @@ not sufficient to validate raw diagnostics.
 
 After `Sim_done`, the raw validation phase must still check configured raw
 diagnostics.
+
+## Managed case-cycle execution
+
+The simulation lifecycle may be used as the first part of a managed case-local
+cycle.
+
+For expensive WarpX/PyWarpX campaigns, the preferred production pattern may be:
+
+```text
+case-local SLURM array task
+  -> mark_sim_submitted
+  -> mark_sim_running
+  -> run external WarpX/PyWarpX simulation
+  -> mark_sim_done or mark_sim_failed
+  -> validate_raw_case
+  -> analyze_case
+  -> mark_raw_delete_eligible
+  -> cleanup_raw_case --dry-run
+  -> optionally cleanup_raw_case --execute
+```
+
+This does not make simulation completion equivalent to cleanup permission.
+
+The separation between phases remains mandatory:
+
+- each phase must write its own evidence;
+- each phase must have inspectable logs;
+- a failure must stop the remaining phases for that case;
+- raw diagnostics must still pass raw validation;
+- reduced outputs must still pass reduced validation;
+- cleanup eligibility must still be explicit;
+- cleanup execute must still use a validated dry-run manifest;
+- cleanup execute must require explicit confirmation.
+
+The reason for allowing a case-local cycle is practical: simulation usually
+dominates walltime, while raw validation, analysis/reduced validation, cleanup
+eligibility, and cleanup dry-run are expected to be much shorter for the current
+campaign class.
+
+There must still be no resident parent orchestrator. A case-local array task does
+work and exits. It must not sit idle waiting for other jobs.
+
+Campaign-wide operations remain separate because they are intrinsically global:
+
+```text
+storage_snapshot
+optimizer_tick
+objective aggregation
+candidate proposal
+campaign summary reports
+```
+
+For future BO/MORBO workflows, the optimizer tick is expected to run globally
+after one or more case-local cycles have produced validated reduced outputs. It
+must not become a resident daemon.
 
 ## Cleanup safety
 
@@ -469,7 +541,7 @@ Do not implement yet:
 - campaign creation for ionization;
 - physics input editing;
 - SLURM-specific logic in the workflow core;
-- cleanup triggered by simulation completion.
+- Cleanup authorized by simulation completion alone.
 
 ## First implementation target
 

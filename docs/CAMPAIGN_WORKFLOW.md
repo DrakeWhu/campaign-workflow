@@ -64,24 +64,57 @@ No case should write into another case directory.
 
 Global summaries may be produced later by reading case-local validated outputs.
 
-## Separation of jobs
+## Execution model: case-local cycle plus campaign-wide ticks
 
-Simulation, raw validation, analysis, reduced validation, cleanup, and future optimization are separate jobs.
+The workflow separates responsibilities by phase, but this does not require one
+SLURM job per phase.
+
+The preferred production model for expensive WarpX/PyWarpX campaigns is a
+case-local cycle executed by a SLURM array task:
+
+```text
+case cycle array task
+  -> mark_sim_submitted
+  -> mark_sim_running
+  -> run external simulation
+  -> mark_sim_done or mark_sim_failed
+  -> validate_raw_case
+  -> analyze_case
+  -> mark_raw_delete_eligible
+  -> cleanup_raw_case --dry-run
+  -> optionally cleanup_raw_case --execute
+```
+
+The simulation step dominates walltime. Raw validation, analysis/reduced
+validation, cleanup eligibility, and cleanup dry-run are expected to be much
+shorter for the current campaign class, so executing them immediately after a
+successful simulation avoids unnecessary intermediate scheduling overhead.
+
+The separation remains semantic and transactional:
+
+- every phase writes explicit workflow evidence;
+- every phase may fail independently;
+- logs must identify the phase that failed;
+- cleanup still requires validated raw evidence, validated reduced evidence,
+- explicit eligibility, and a validated dry-run manifest;
+- cleanup execute remains optional and must require explicit confirmation.
 
 There is no resident parent orchestrator in V1.
 
-The intended execution model is:
+Campaign-wide jobs are allowed only when the operation is intrinsically global,
+for example:
 
 ```
-simulation array
-    -> raw validation array
-    -> analysis array
-    -> reduced validation array
-    -> storage snapshot
-    -> cleanup array
+storage snapshot
+optimizer tick
+ranking / objective aggregation
+candidate proposal
+campaign summary reports
 ```
 
-Each job is allowed to be short-lived and idempotent.
+A launcher may submit one or more jobs and exit immediately. Such a launcher is
+not a resident orchestrator. It must not occupy a long walltime partition while
+waiting or polling.
 
 ## Data clases
 
