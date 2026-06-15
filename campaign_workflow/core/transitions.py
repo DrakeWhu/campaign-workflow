@@ -82,12 +82,19 @@ def ensure_legacy_reduced_validation_compatible(state_doc: dict[str, Any]) -> No
         )
 
 
-def ensure_analysis_start_compatible(state_doc: dict[str, Any]) -> None:
+def ensure_analysis_start_compatible(
+    state_doc: dict[str, Any],
+    *,
+    allow_raw_delete_eligible: bool = False,
+) -> None:
     current = state_name(state_doc)
-    if current not in ANALYSIS_START_COMPATIBLE_STATES:
-        allowed = ", ".join(sorted(ANALYSIS_START_COMPATIBLE_STATES))
-        raise ValueError(f"analysis is not allowed from state {current!r}; allowed states: {allowed}")
+    allowed_states = set(ANALYSIS_START_COMPATIBLE_STATES)
+    if allow_raw_delete_eligible:
+        allowed_states.add("Raw_delete_eligible")
 
+    if current not in allowed_states:
+        allowed = ", ".join(sorted(allowed_states))
+        raise ValueError(f"analysis is not allowed from state {current!r}; allowed states: {allowed}")
 
 def ensure_analysis_final_compatible(state_doc: dict[str, Any]) -> None:
     current = state_name(state_doc)
@@ -203,8 +210,15 @@ def mark_sim_done_transition(state_doc: dict[str, Any], *, reason: str) -> dict[
     )
 
 
-def analysis_start_transition(state_doc: dict[str, Any]) -> dict[str, Any]:
-    ensure_analysis_start_compatible(state_doc)
+def analysis_start_transition(
+    state_doc: dict[str, Any],
+    *,
+    allow_raw_delete_eligible: bool = False,
+) -> dict[str, Any]:
+    ensure_analysis_start_compatible(
+        state_doc,
+        allow_raw_delete_eligible=allow_raw_delete_eligible,
+    )
     return transition_state_document(
         state_doc,
         to_state="Analyzing",

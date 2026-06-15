@@ -21,9 +21,11 @@ from campaign_workflow.core.transitions import (
     analysis_start_transition,
     analysis_success_transition,
     ensure_analysis_start_compatible,
+    state_name,
 )
 from campaign_workflow.core.tsv_cases import CaseRecord, load_campaign_config, load_cases
 from campaign_workflow.core.validation_evidence import validate_required_raw_evidence
+from campaign_workflow.core.path_safety import safe_relative_posix, validate_existing_file_inside_case
 
 
 OPERATION = "analyze_case"
@@ -57,6 +59,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--verbose",
         action="store_true",
         help="Print per-case analysis and reduced-output details.",
+    )
+
+    parser.add_argument(
+        "--allow-rerun-from-raw-delete-eligible",
+        action="store_true",
+        help=(
+            "Explicitly allow re-running analysis for cases currently in Raw_delete_eligible, "
+            "provided preserved raw files still match raw validation evidence and cleanup has not executed. "
+            "A successful re-run returns the case to Reduced_validated and blocks previous cleanup eligibility."
+        ),
     )
 
     return parser
@@ -110,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
             analysis=analysis,
             reduced_outputs=reduced_outputs,
             dry_run=args.dry_run,
+            allow_rerun_from_raw_delete_eligible=args.allow_rerun_from_raw_delete_eligible,
         )
 
         errors = result["errors"]
@@ -171,6 +184,7 @@ def analyze_one_case(
     analysis: dict[str, Any],
     reduced_outputs: list[Any],
     dry_run: bool,
+    allow_rerun_from_raw_delete_eligible: bool = False,
 ) -> dict[str, Any]:
     layout = get_state_layout(config)
     case_dir = campaign_root / case.case_name
@@ -209,8 +223,14 @@ def analyze_one_case(
         result["errors"].extend(validation_errors)
         return result
 
+    current_state = state_name(state_doc)
+    rerun_from_raw_delete_eligible = current_state == "Raw_delete_eligible"
+
     try:
-        ensure_analysis_start_compatible(state_doc)
+        ensure_analysis_start_compatible(
+            state_doc,
+            allow_raw_delete_eligible=allow_rerun_from_raw_delete_eligible,
+        )
     except Exception as exc:
         result["errors"].append(str(exc))
         return result
@@ -219,6 +239,21 @@ def analyze_one_case(
     if raw_evidence_errors:
         result["errors"].extend(raw_evidence_errors)
         return result
+    
+    if rerun_from_raw_delete_eligible:
+        rerun_errors = _validate_raw_delete_eligible_rerun_preconditions(
+            config=config,
+            case_dir=case_dir,
+            layout=layout,
+            validation_doc=validation_doc,
+        )
+        if rerun_errors:
+            result["errors"].extend(rerun_errors)
+            return result
+        result["warnings"].append(
+            "re-running analysis from Raw_delete_eligible will block previous cleanup eligibility; "
+            "run mark_raw_delete_eligible and cleanup_raw_case --dry-run again before any future cleanup"
+        )
 
     if dry_run:
         result["case_ok"] = True
@@ -231,7 +266,10 @@ def analyze_one_case(
         result["warnings"].append("dry-run does not execute the analysis adapter, so final output validity is not known")
         return result
 
-    started_state = analysis_start_transition(state_doc)
+    started_state = analysis_start_transition(
+        state_doc,
+        allow_raw_delete_eligible=allow_rerun_from_raw_delete_eligible,
+    )
     result["actions"].append(f"transition state to Analyzing: {state_path}")
     write_json_atomic(state_path, started_state)
 
@@ -263,6 +301,7 @@ def analyze_one_case(
         analysis=analysis,
         adapter_result=adapter_result,
         log_info=log_info,
+        rerun_from_raw_delete_eligible=rerun_from_raw_delete_eligible,
     )
 
     if not adapter_result.ok:
@@ -271,7 +310,7 @@ def analyze_one_case(
         analysis_summary["final_state"] = "Analysis_failed"
         analysis_summary["reduced_validation_ok"] = False
         _store_analysis_summary(updated_validation, analysis_name, analysis_summary)
-        _set_cleanup_blocked(updated_validation, "Analysis failed. Cleanup is not allowed.")
+        _set_cleanup_blocked(updated_validation, "Analysis failed. Cleanup is not allowed.", invalidate_delete_manifest=rerun_from_raw_delete_eligible)
         _append_analysis_note(updated_validation, analysis_name=analysis_name, ok=False)
 
         failed_marker = _analysis_marker(
@@ -326,6 +365,7 @@ def analyze_one_case(
         _set_cleanup_blocked(
             updated_validation,
             "Analysis and reduced validation succeeded, but cleanup requires a later explicit eligibility phase.",
+            invalidate_delete_manifest=rerun_from_raw_delete_eligible,
         )
         done_marker_path = case_dir / layout["post_dir"] / "analysis_done.json"
         result["actions"].append(f"write analysis done marker: {done_marker_path}")
@@ -342,7 +382,7 @@ def analyze_one_case(
 
     result["errors"].extend(required_errors)
     result["errors"].append("analysis completed, but one or more required reduced outputs failed validation")
-    _set_cleanup_blocked(updated_validation, "Analysis output validation failed. Cleanup is not allowed.")
+    _set_cleanup_blocked(updated_validation, "Analysis output validation failed. Cleanup is not allowed.", invalidate_delete_manifest=rerun_from_raw_delete_eligible)
 
     failed_marker_path = case_dir / layout["post_dir"] / "analysis_failed.json"
     result["actions"].append(f"write analysis failure marker: {failed_marker_path}")
@@ -355,6 +395,125 @@ def analyze_one_case(
     write_json_atomic(validation_path, updated_validation)
     write_json_atomic(state_path, final_state)
     return result
+
+
+def _validate_raw_delete_eligible_rerun_preconditions(
+    *,
+    config: dict[str, Any],
+    case_dir: Path,
+    layout: dict[str, str],
+    validation_doc: dict[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+
+    deleted_marker = case_dir / layout["post_dir"] / "raw_deleted.json"
+    if deleted_marker.exists():
+        errors.append(f"cannot re-run analysis after raw cleanup execution marker exists: {deleted_marker}")
+
+    cleanup = validation_doc.get("cleanup")
+    if isinstance(cleanup, dict):
+        if cleanup.get("raw_deleted") is True:
+            errors.append("cannot re-run analysis because validation cleanup.raw_deleted is true")
+        if cleanup.get("delete_manifest_mode") == "executed":
+            errors.append("cannot re-run analysis because cleanup delete_manifest_mode is 'executed'")
+    else:
+        errors.append("validation.json cleanup must be an object")
+
+    legacy = validation_doc.get("legacy")
+    if isinstance(legacy, dict) and legacy.get("legacy_reduced_only") is True:
+        errors.append("legacy reduced-only cases cannot be re-analyzed from Raw_delete_eligible")
+
+    errors.extend(_validate_preserved_required_raw_files(config=config, case_dir=case_dir, validation_doc=validation_doc))
+    return errors
+
+
+def _validate_preserved_required_raw_files(
+    *,
+    config: dict[str, Any],
+    case_dir: Path,
+    validation_doc: dict[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+
+    raw_diagnostics = config.get("raw_diagnostics")
+    if not isinstance(raw_diagnostics, list) or not raw_diagnostics:
+        return ["campaign.json must define a non-empty raw_diagnostics list before analysis re-run"]
+
+    raw_section = validation_doc.get("raw")
+    if not isinstance(raw_section, dict):
+        return ["validation.json raw must be an object before analysis re-run"]
+
+    for diagnostic in raw_diagnostics:
+        if not isinstance(diagnostic, dict):
+            errors.append(f"raw diagnostic entry must be an object, got {type(diagnostic).__name__}")
+            continue
+        if not bool(diagnostic.get("required", True)):
+            continue
+
+        name = diagnostic.get("name")
+        if not isinstance(name, str) or not name.strip():
+            errors.append("required raw diagnostic is missing a non-empty name")
+            continue
+        name = name.strip()
+
+        summary = raw_section.get(name)
+        if not isinstance(summary, dict):
+            errors.append(f"missing raw validation evidence for required diagnostic {name!r}")
+            continue
+
+        files = summary.get("files")
+        if not isinstance(files, list) or not files:
+            errors.append(f"raw validation evidence for {name!r} does not list preserved files")
+            continue
+
+        file_count = summary.get("file_count")
+        if isinstance(file_count, int) and file_count != len(files):
+            errors.append(
+                f"raw validation evidence file_count mismatch for {name!r}: "
+                f"file_count={file_count}, listed_files={len(files)}"
+            )
+
+        seen: set[str] = set()
+        for index, entry in enumerate(files):
+            if not isinstance(entry, dict):
+                errors.append(f"raw validation file entry {name!r}[{index}] must be an object")
+                continue
+
+            rel_raw = entry.get("relative_path")
+            if not isinstance(rel_raw, str) or not rel_raw.strip():
+                errors.append(f"raw validation file entry {name!r}[{index}] has no relative_path")
+                continue
+
+            rel = rel_raw.strip()
+            if rel in seen:
+                errors.append(f"duplicate raw validation relative_path for {name!r}: {rel}")
+                continue
+            seen.add(rel)
+
+            try:
+                path = validate_existing_file_inside_case(
+                    case_dir,
+                    rel,
+                    label=f"raw validation file {name!r}[{index}]",
+                )
+                normalized_rel = safe_relative_posix(case_dir, path)
+            except Exception as exc:
+                errors.append(f"missing or unsafe preserved raw file for {name!r}: {rel}: {exc}")
+                continue
+
+            if normalized_rel != rel:
+                errors.append(f"raw validation relative_path normalization mismatch for {name!r}: {rel} != {normalized_rel}")
+
+            expected_size = entry.get("size_bytes")
+            if isinstance(expected_size, int):
+                actual_size = int(path.stat().st_size)
+                if actual_size != expected_size:
+                    errors.append(
+                        f"preserved raw file size mismatch for {name!r}: "
+                        f"{rel}: validation={expected_size}, current={actual_size}"
+                    )
+
+    return errors
 
 
 def _configured_analysis(config: dict[str, Any]) -> dict[str, Any] | None:
@@ -456,6 +615,7 @@ def _analysis_summary(
     analysis: dict[str, Any],
     adapter_result: AnalysisAdapterResult,
     log_info: dict[str, Any],
+    rerun_from_raw_delete_eligible: bool,
 ) -> dict[str, Any]:
     summary = asdict(adapter_result)
     summary.update(
@@ -468,6 +628,7 @@ def _analysis_summary(
             "operation": OPERATION,
             "logs": log_info,
             "cleanup_allowed": False,
+            "rerun_from_raw_delete_eligible": rerun_from_raw_delete_eligible,
         }
     )
     summary.pop("stdout", None)
@@ -508,13 +669,30 @@ def _store_analysis_summary(validation_doc: dict[str, Any], analysis_name: str, 
     validation_doc["updated_at"] = now_utc()
 
 
-def _set_cleanup_blocked(validation_doc: dict[str, Any], reason: str) -> None:
+def _set_cleanup_blocked(
+    validation_doc: dict[str, Any],
+    reason: str,
+    *,
+    invalidate_delete_manifest: bool = False,
+) -> None:
     cleanup = validation_doc.setdefault("cleanup", {})
     if not isinstance(cleanup, dict):
         validation_doc["cleanup"] = {}
         cleanup = validation_doc["cleanup"]
+
+    had_cleanup_evidence = bool(cleanup.get("cleanup_allowed", False)) or bool(
+        cleanup.get("delete_manifest_ready", False)
+    )
+
     cleanup["cleanup_allowed"] = False
     cleanup["reason"] = reason
+
+    if invalidate_delete_manifest:
+        cleanup["delete_manifest_ready"] = False
+        cleanup["execute_required"] = False
+        cleanup["previous_cleanup_evidence_invalidated"] = had_cleanup_evidence
+        cleanup["previous_cleanup_evidence_invalidated_at"] = now_utc()
+        cleanup["previous_cleanup_evidence_invalidated_by"] = OPERATION
 
 
 def _append_analysis_note(validation_doc: dict[str, Any], *, analysis_name: str, ok: bool) -> None:

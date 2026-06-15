@@ -171,6 +171,120 @@ class AnalysisAdapterTests(unittest.TestCase):
         self.assertTrue(validation["reduced"]["fake_metrics"]["ok"])
         self.assertEqual(validation["reduced"]["fake_metrics"]["row_count"], 1)
 
+    def test_raw_delete_eligible_requires_explicit_rerun_flag(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._prepare_raw_validated_case(case_dir)
+        self._mark_raw_delete_eligible_like(case_dir)
+
+        rc = analyze_case_main(["--campaign-root", str(self.root), "--case-id", "0"])
+
+        self.assertEqual(rc, 1)
+
+        state = read_json(case_dir / "state.json")
+        validation = read_json(case_dir / "validation.json")
+
+        self.assertEqual(state["state"], "Raw_delete_eligible")
+        self.assertNotIn("analysis", validation)
+        self.assertEqual(validation["reduced"], {})
+        self.assertFalse((case_dir / "post/fake_metrics.csv").exists())
+
+
+    def test_raw_delete_eligible_rerun_succeeds_with_flag_and_blocks_cleanup(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._prepare_raw_validated_case(case_dir)
+        self._mark_raw_delete_eligible_like(case_dir)
+
+        rc = analyze_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--allow-rerun-from-raw-delete-eligible",
+            ]
+        )
+
+        self.assertEqual(rc, 0)
+
+        state = read_json(case_dir / "state.json")
+        validation = read_json(case_dir / "validation.json")
+
+        self.assertEqual(state["state"], "Reduced_validated")
+        self.assertEqual(state["history"][-2]["from"], "Raw_delete_eligible")
+        self.assertEqual(state["history"][-2]["to"], "Analyzing")
+        self.assertEqual(state["history"][-1]["to"], "Reduced_validated")
+
+        self.assertTrue(validation["analysis"]["fake_analysis"]["ok"])
+        self.assertTrue(validation["analysis"]["fake_analysis"]["rerun_from_raw_delete_eligible"])
+        self.assertTrue(validation["reduced"]["fake_metrics"]["ok"])
+
+        cleanup = validation["cleanup"]
+        self.assertFalse(cleanup["cleanup_allowed"])
+        self.assertFalse(cleanup["delete_manifest_ready"])
+        self.assertFalse(cleanup["execute_required"])
+        self.assertTrue(cleanup["previous_cleanup_evidence_invalidated"])
+        self.assertEqual(cleanup["previous_cleanup_evidence_invalidated_by"], "analyze_case")
+
+        self.assertTrue((case_dir / "diags/raw_000.fake").exists())
+        self.assertTrue((case_dir / "post/fake_metrics.csv").exists())
+        self.assertTrue((case_dir / "post/analysis_done.json").exists())
+
+
+    def test_raw_delete_eligible_rerun_rejects_missing_preserved_raw(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._prepare_raw_validated_case(case_dir)
+        self._mark_raw_delete_eligible_like(case_dir)
+        (case_dir / "diags/raw_000.fake").unlink()
+
+        rc = analyze_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--allow-rerun-from-raw-delete-eligible",
+            ]
+        )
+
+        self.assertEqual(rc, 1)
+
+        state = read_json(case_dir / "state.json")
+        validation = read_json(case_dir / "validation.json")
+
+        self.assertEqual(state["state"], "Raw_delete_eligible")
+        self.assertNotIn("analysis", validation)
+        self.assertEqual(validation["reduced"], {})
+        self.assertFalse((case_dir / "post/fake_metrics.csv").exists())
+
+
+    def test_raw_delete_eligible_rerun_rejects_raw_deleted_marker(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._prepare_raw_validated_case(case_dir)
+        self._mark_raw_delete_eligible_like(case_dir)
+        (case_dir / "post/raw_deleted.json").write_text(
+            json.dumps({"operation": "cleanup_raw_case", "raw_deleted": True}) + "\n",
+            encoding="utf-8",
+        )
+
+        rc = analyze_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--allow-rerun-from-raw-delete-eligible",
+            ]
+        )
+
+        self.assertEqual(rc, 1)
+
+        state = read_json(case_dir / "state.json")
+        validation = read_json(case_dir / "validation.json")
+
+        self.assertEqual(state["state"], "Raw_delete_eligible")
+        self.assertNotIn("analysis", validation)
+        self.assertFalse((case_dir / "post/fake_metrics.csv").exists())
+
     def _write_fake_campaign(self) -> None:
         campaign = {
             "schema_version": 1,
@@ -291,6 +405,36 @@ class AnalysisAdapterTests(unittest.TestCase):
         config["analysis"]["kind"] = "command"
         config["analysis"]["command"] = command
         config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+    def _mark_raw_delete_eligible_like(self, case_dir: Path) -> None:
+        self._force_state(case_dir, "Raw_delete_eligible")
+
+        validation_path = case_dir / "validation.json"
+        validation = read_json(validation_path)
+        cleanup = validation.setdefault("cleanup", {})
+        cleanup.update(
+            {
+                "cleanup_allowed": True,
+                "operation": "mark_raw_delete_eligible",
+                "reason": "test fixture cleanup eligibility",
+                "candidate_file_count": 1,
+                "candidate_total_size_bytes": 12,
+                "delete_manifest_ready": True,
+                "delete_manifest_mode": "dry-run",
+                "execute_required": True,
+                "destructive_operations": 0,
+            }
+        )
+        write_json_atomic(validation_path, validation)
+
+        post_dir = case_dir / "post"
+        post_dir.mkdir(parents=True, exist_ok=True)
+        (post_dir / "raw_delete_eligible.json").write_text(
+            json.dumps({"operation": "mark_raw_delete_eligible", "state": "Raw_delete_eligible"}) + "\n",
+            encoding="utf-8",
+        )
+
+
 
 
 if __name__ == "__main__":
