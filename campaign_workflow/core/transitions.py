@@ -37,6 +37,15 @@ ANALYSIS_FINAL_COMPATIBLE_STATES = {
     "Analyzing",
 }
 
+RAW_DELETE_ELIGIBILITY_COMPATIBLE_STATES = {
+    "Reduced_validated",
+    "Raw_delete_eligible",
+}
+
+RAW_DELETE_ELIGIBILITY_FINAL_STATES = {
+    "Raw_delete_eligible",
+}
+
 def state_name(state_doc: dict[str, Any]) -> str:
     state = state_doc.get("state")
     if not isinstance(state, str):
@@ -217,4 +226,33 @@ def analysis_failure_transition(state_doc: dict[str, Any], *, reason: str) -> di
         to_state="Analysis_failed",
         operation="analyze_case",
         reason=reason,
+    )
+
+def ensure_raw_delete_eligibility_compatible(state_doc: dict[str, Any]) -> None:
+    current = state_name(state_doc)
+    if current not in RAW_DELETE_ELIGIBILITY_COMPATIBLE_STATES:
+        allowed = ", ".join(sorted(RAW_DELETE_ELIGIBILITY_COMPATIBLE_STATES))
+        raise ValueError(
+            f"raw delete eligibility is not allowed from state {current!r}; "
+            f"allowed states: {allowed}"
+        )
+
+
+def raw_delete_eligible_transition(state_doc: dict[str, Any]) -> dict[str, Any]:
+    ensure_raw_delete_eligibility_compatible(state_doc)
+
+    current = state_name(state_doc)
+    if current == "Raw_delete_eligible":
+        return transition_state_document(
+            state_doc,
+            to_state="Raw_delete_eligible",
+            operation="mark_raw_delete_eligible",
+            reason="raw delete eligibility revalidated",
+        )
+
+    return transition_state_document(
+        state_doc,
+        to_state="Raw_delete_eligible",
+        operation="mark_raw_delete_eligible",
+        reason="raw and reduced evidence allow entering cleanup dry-run phase",
     )
