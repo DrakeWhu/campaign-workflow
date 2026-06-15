@@ -71,6 +71,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    parser.add_argument(
+        "--allow-rerun-from-reduced-validated",
+        action="store_true",
+        help=(
+            "Explicitly allow re-running analysis for cases currently in Reduced_validated, "
+            "provided required raw validation evidence still exists. "
+            "This is intended for repeating analysis after the external analysis module changes."
+        ),
+    )
+
     return parser
 
 
@@ -123,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             reduced_outputs=reduced_outputs,
             dry_run=args.dry_run,
             allow_rerun_from_raw_delete_eligible=args.allow_rerun_from_raw_delete_eligible,
+            allow_rerun_from_reduced_validated=args.allow_rerun_from_reduced_validated,
         )
 
         errors = result["errors"]
@@ -185,6 +196,7 @@ def analyze_one_case(
     reduced_outputs: list[Any],
     dry_run: bool,
     allow_rerun_from_raw_delete_eligible: bool = False,
+    allow_rerun_from_reduced_validated: bool = False,
 ) -> dict[str, Any]:
     layout = get_state_layout(config)
     case_dir = campaign_root / case.case_name
@@ -225,11 +237,14 @@ def analyze_one_case(
 
     current_state = state_name(state_doc)
     rerun_from_raw_delete_eligible = current_state == "Raw_delete_eligible"
+    rerun_from_reduced_validated = current_state == "Reduced_validated"
+    rerun_from_final_state = rerun_from_raw_delete_eligible or rerun_from_reduced_validated
 
     try:
         ensure_analysis_start_compatible(
             state_doc,
             allow_raw_delete_eligible=allow_rerun_from_raw_delete_eligible,
+            allow_reduced_validated=allow_rerun_from_reduced_validated,
         )
     except Exception as exc:
         result["errors"].append(str(exc))
@@ -241,11 +256,12 @@ def analyze_one_case(
         return result
     
     if rerun_from_raw_delete_eligible:
-        rerun_errors = _validate_raw_delete_eligible_rerun_preconditions(
+        rerun_errors = _validate_analysis_rerun_preconditions(
             config=config,
             case_dir=case_dir,
             layout=layout,
             validation_doc=validation_doc,
+            source_state="Raw_delete_eligible",
         )
         if rerun_errors:
             result["errors"].extend(rerun_errors)
@@ -253,6 +269,22 @@ def analyze_one_case(
         result["warnings"].append(
             "re-running analysis from Raw_delete_eligible will block previous cleanup eligibility; "
             "run mark_raw_delete_eligible and cleanup_raw_case --dry-run again before any future cleanup"
+        )
+
+    if rerun_from_reduced_validated:
+        rerun_errors = _validate_analysis_rerun_preconditions(
+            config=config,
+            case_dir=case_dir,
+            layout=layout,
+            validation_doc=validation_doc,
+            source_state="Reduced_validated",
+        )
+        if rerun_errors:
+            result["errors"].extend(rerun_errors)
+            return result
+        result["warnings"].append(
+            "re-running analysis from Reduced_validated will overwrite/update configured reduced outputs; "
+            "cleanup remains blocked until a later explicit eligibility phase"
         )
 
     if dry_run:
@@ -269,6 +301,7 @@ def analyze_one_case(
     started_state = analysis_start_transition(
         state_doc,
         allow_raw_delete_eligible=allow_rerun_from_raw_delete_eligible,
+        allow_reduced_validated=allow_rerun_from_reduced_validated,
     )
     result["actions"].append(f"transition state to Analyzing: {state_path}")
     write_json_atomic(state_path, started_state)
@@ -302,6 +335,8 @@ def analyze_one_case(
         adapter_result=adapter_result,
         log_info=log_info,
         rerun_from_raw_delete_eligible=rerun_from_raw_delete_eligible,
+        rerun_from_reduced_validated=rerun_from_reduced_validated,
+        rerun_from_state=current_state if rerun_from_final_state else None,
     )
 
     if not adapter_result.ok:
@@ -310,7 +345,7 @@ def analyze_one_case(
         analysis_summary["final_state"] = "Analysis_failed"
         analysis_summary["reduced_validation_ok"] = False
         _store_analysis_summary(updated_validation, analysis_name, analysis_summary)
-        _set_cleanup_blocked(updated_validation, "Analysis failed. Cleanup is not allowed.", invalidate_delete_manifest=rerun_from_raw_delete_eligible)
+        _set_cleanup_blocked(updated_validation, "Analysis failed. Cleanup is not allowed.", invalidate_delete_manifest=rerun_from_final_state)
         _append_analysis_note(updated_validation, analysis_name=analysis_name, ok=False)
 
         failed_marker = _analysis_marker(
@@ -365,7 +400,7 @@ def analyze_one_case(
         _set_cleanup_blocked(
             updated_validation,
             "Analysis and reduced validation succeeded, but cleanup requires a later explicit eligibility phase.",
-            invalidate_delete_manifest=rerun_from_raw_delete_eligible,
+            invalidate_delete_manifest=rerun_from_final_state,
         )
         done_marker_path = case_dir / layout["post_dir"] / "analysis_done.json"
         result["actions"].append(f"write analysis done marker: {done_marker_path}")
@@ -382,7 +417,7 @@ def analyze_one_case(
 
     result["errors"].extend(required_errors)
     result["errors"].append("analysis completed, but one or more required reduced outputs failed validation")
-    _set_cleanup_blocked(updated_validation, "Analysis output validation failed. Cleanup is not allowed.", invalidate_delete_manifest=rerun_from_raw_delete_eligible)
+    _set_cleanup_blocked(updated_validation, "Analysis output validation failed. Cleanup is not allowed.", invalidate_delete_manifest=rerun_from_final_state)
 
     failed_marker_path = case_dir / layout["post_dir"] / "analysis_failed.json"
     result["actions"].append(f"write analysis failure marker: {failed_marker_path}")
@@ -397,12 +432,13 @@ def analyze_one_case(
     return result
 
 
-def _validate_raw_delete_eligible_rerun_preconditions(
+def _validate_analysis_rerun_preconditions(
     *,
     config: dict[str, Any],
     case_dir: Path,
     layout: dict[str, str],
     validation_doc: dict[str, Any],
+    source_state: str,
 ) -> list[str]:
     errors: list[str] = []
 
@@ -421,7 +457,7 @@ def _validate_raw_delete_eligible_rerun_preconditions(
 
     legacy = validation_doc.get("legacy")
     if isinstance(legacy, dict) and legacy.get("legacy_reduced_only") is True:
-        errors.append("legacy reduced-only cases cannot be re-analyzed from Raw_delete_eligible")
+        errors.append(f"legacy reduced-only cases cannot be re-analyzed from {source_state}")
 
     errors.extend(_validate_preserved_required_raw_files(config=config, case_dir=case_dir, validation_doc=validation_doc))
     return errors
@@ -616,6 +652,8 @@ def _analysis_summary(
     adapter_result: AnalysisAdapterResult,
     log_info: dict[str, Any],
     rerun_from_raw_delete_eligible: bool,
+    rerun_from_reduced_validated: bool,
+    rerun_from_state: str | None,
 ) -> dict[str, Any]:
     summary = asdict(adapter_result)
     summary.update(
@@ -629,6 +667,8 @@ def _analysis_summary(
             "logs": log_info,
             "cleanup_allowed": False,
             "rerun_from_raw_delete_eligible": rerun_from_raw_delete_eligible,
+            "rerun_from_reduced_validated": rerun_from_reduced_validated,
+            "rerun_from_state": rerun_from_state,
         }
     )
     summary.pop("stdout", None)

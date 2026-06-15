@@ -86,11 +86,14 @@ def ensure_analysis_start_compatible(
     state_doc: dict[str, Any],
     *,
     allow_raw_delete_eligible: bool = False,
+    allow_reduced_validated: bool = False,
 ) -> None:
     current = state_name(state_doc)
     allowed_states = set(ANALYSIS_START_COMPATIBLE_STATES)
     if allow_raw_delete_eligible:
         allowed_states.add("Raw_delete_eligible")
+    if allow_reduced_validated:
+        allowed_states.add("Reduced_validated")
 
     if current not in allowed_states:
         allowed = ", ".join(sorted(allowed_states))
@@ -214,10 +217,12 @@ def analysis_start_transition(
     state_doc: dict[str, Any],
     *,
     allow_raw_delete_eligible: bool = False,
+    allow_reduced_validated: bool = False,
 ) -> dict[str, Any]:
     ensure_analysis_start_compatible(
         state_doc,
         allow_raw_delete_eligible=allow_raw_delete_eligible,
+        allow_reduced_validated=allow_reduced_validated,
     )
     return transition_state_document(
         state_doc,

@@ -285,6 +285,95 @@ class AnalysisAdapterTests(unittest.TestCase):
         self.assertNotIn("analysis", validation)
         self.assertFalse((case_dir / "post/fake_metrics.csv").exists())
 
+    
+    def test_reduced_validated_requires_explicit_rerun_flag(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._prepare_raw_validated_case(case_dir)
+
+        rc = analyze_case_main(["--campaign-root", str(self.root), "--case-id", "0"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(read_json(case_dir / "state.json")["state"], "Reduced_validated")
+
+        self._set_analysis_fake_fail(True)
+        rc = analyze_case_main(["--campaign-root", str(self.root), "--case-id", "0"])
+
+        self.assertEqual(rc, 1)
+
+        state = read_json(case_dir / "state.json")
+        validation = read_json(case_dir / "validation.json")
+
+        self.assertEqual(state["state"], "Reduced_validated")
+        self.assertTrue(validation["analysis"]["fake_analysis"]["ok"])
+        self.assertTrue(validation["reduced"]["fake_metrics"]["ok"])
+
+
+    def test_reduced_validated_rerun_succeeds_with_flag(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._prepare_raw_validated_case(case_dir)
+
+        rc = analyze_case_main(["--campaign-root", str(self.root), "--case-id", "0"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(read_json(case_dir / "state.json")["state"], "Reduced_validated")
+
+        rc = analyze_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--allow-rerun-from-reduced-validated",
+            ]
+        )
+
+        self.assertEqual(rc, 0)
+
+        state = read_json(case_dir / "state.json")
+        validation = read_json(case_dir / "validation.json")
+
+        self.assertEqual(state["state"], "Reduced_validated")
+        self.assertEqual(state["history"][-2]["from"], "Reduced_validated")
+        self.assertEqual(state["history"][-2]["to"], "Analyzing")
+        self.assertEqual(state["history"][-1]["to"], "Reduced_validated")
+
+        analysis = validation["analysis"]["fake_analysis"]
+        self.assertTrue(analysis["ok"])
+        self.assertFalse(analysis["rerun_from_raw_delete_eligible"])
+        self.assertTrue(analysis["rerun_from_reduced_validated"])
+        self.assertEqual(analysis["rerun_from_state"], "Reduced_validated")
+        self.assertTrue(validation["reduced"]["fake_metrics"]["ok"])
+        self.assertFalse(validation["cleanup"]["cleanup_allowed"])
+
+
+    def test_reduced_validated_rerun_rejects_missing_preserved_raw(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._prepare_raw_validated_case(case_dir)
+
+        rc = analyze_case_main(["--campaign-root", str(self.root), "--case-id", "0"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(read_json(case_dir / "state.json")["state"], "Reduced_validated")
+
+        (case_dir / "diags/raw_000.fake").unlink()
+
+        rc = analyze_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--allow-rerun-from-reduced-validated",
+            ]
+        )
+
+        self.assertEqual(rc, 1)
+
+        state = read_json(case_dir / "state.json")
+        validation = read_json(case_dir / "validation.json")
+
+        self.assertEqual(state["state"], "Reduced_validated")
+        self.assertTrue(validation["analysis"]["fake_analysis"]["ok"])
+        self.assertTrue(validation["reduced"]["fake_metrics"]["ok"])
+
+
     def _write_fake_campaign(self) -> None:
         campaign = {
             "schema_version": 1,
