@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 CASE_DIR [DIAG_REL] [OUTDIR_REL]" >&2
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 CASE_DIR" >&2
     exit 2
 fi
 
 CASE_DIR="$1"
-DIAG_REL="${2:-diags/diag1}"
-OUTDIR_REL="${3:-.}"
 
 GUIDING_ANALYSIS_ROOT="${GUIDING_ANALYSIS_ROOT:-$HOME/apps/src/guiding_analysis_module}"
 GUIDING_ANALYSIS_VENV="${GUIDING_ANALYSIS_VENV:-$HOME/apps/venvs/guiding-analysis-py310}"
@@ -31,7 +29,7 @@ source "${GUIDING_ANALYSIS_VENV}/bin/activate"
 cd "${GUIDING_ANALYSIS_ROOT}"
 
 python scripts/analyze_case.py \
-    --diag "${CASE_DIR}/${DIAG_REL}" \
-    --outdir "${CASE_DIR}/${OUTDIR_REL}" \
+    --diag "${CASE_DIR}/diags/diag1" \
+    --outdir "${CASE_DIR}" \
     --overwrite \
     --no-plots

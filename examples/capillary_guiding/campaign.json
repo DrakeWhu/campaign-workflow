@@ -33,20 +33,46 @@
 
   "analysis": {
     "name": "guiding",
-    "kind": "python_adapter",
-    "adapter": "guiding",
+    "kind": "command",
+    "adapter": "command",
     "inputs": ["fields_openpmd"],
+    "command": [
+      "bash",
+      "{campaign_root}/workflow/examples/capillary_guiding/run_guiding_case_analysis_sunrise.sh",
+      "{case_dir}"
+    ],
     "outputs": [
       {
         "name": "guiding_metrics",
         "kind": "csv",
-        "path": "post/guiding_metrics.csv",
+        "path": "guiding_metrics.csv",
         "min_rows": 1,
-        "required_columns": [],
+        "required_columns": [
+          "iteration",
+          "time_fs",
+          "z_min_um",
+          "z_max_um",
+          "z_peak_um",
+          "front_margin_um",
+          "back_margin_um",
+          "waist_um",
+          "peak_I_proxy",
+          "Eperp_peak_Vm",
+          "a0_peak",
+          "energy_proxy",
+          "Ez_wake_max",
+          "Ez_wake_min",
+          "Ez_wake_absmax",
+          "Ez_wake_rms",
+          "z_Ez_absmax_um",
+          "z_Ez_absmax_rel_um",
+          "propagation_mm",
+          "z_peak_relative_um"
+        ],
         "required": true
       }
     ],
-    "notes": "This is the first analysis adapter. It must remain replaceable by another analysis module in future campaigns."
+    "notes": "Runs the external guiding analysis module in its own SUNRISE environment and writes the official per-case reduced output CASE_DIR/guiding_metrics.csv."
   },
 
   "cleanup": {
