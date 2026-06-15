@@ -28,6 +28,14 @@ LEGACY_REDUCED_VALIDATION_COMPATIBLE_STATES = {
     "Reduced_validated",
 }
 
+ANALYSIS_START_COMPATIBLE_STATES = {
+    "Raw_validated",
+    "Analysis_failed",
+}
+
+ANALYSIS_FINAL_COMPATIBLE_STATES = {
+    "Analyzing",
+}
 
 def state_name(state_doc: dict[str, Any]) -> str:
     state = state_doc.get("state")
@@ -59,6 +67,20 @@ def ensure_legacy_reduced_validation_compatible(state_doc: dict[str, Any]) -> No
         raise ValueError(
             f"legacy reduced-only validation is not allowed from state {current!r}; allowed states: {allowed}"
         )
+
+
+def ensure_analysis_start_compatible(state_doc: dict[str, Any]) -> None:
+    current = state_name(state_doc)
+    if current not in ANALYSIS_START_COMPATIBLE_STATES:
+        allowed = ", ".join(sorted(ANALYSIS_START_COMPATIBLE_STATES))
+        raise ValueError(f"analysis is not allowed from state {current!r}; allowed states: {allowed}")
+
+
+def ensure_analysis_final_compatible(state_doc: dict[str, Any]) -> None:
+    current = state_name(state_doc)
+    if current not in ANALYSIS_FINAL_COMPATIBLE_STATES:
+        allowed = ", ".join(sorted(ANALYSIS_FINAL_COMPATIBLE_STATES))
+        raise ValueError(f"analysis finalization is not allowed from state {current!r}; allowed states: {allowed}")
 
 
 def transition_state_document(
@@ -164,5 +186,35 @@ def mark_sim_done_transition(state_doc: dict[str, Any], *, reason: str) -> dict[
         state_doc,
         to_state="Sim_done",
         operation="mark_sim_done",
+        reason=reason,
+    )
+
+
+def analysis_start_transition(state_doc: dict[str, Any]) -> dict[str, Any]:
+    ensure_analysis_start_compatible(state_doc)
+    return transition_state_document(
+        state_doc,
+        to_state="Analyzing",
+        operation="analyze_case",
+        reason="case-local analysis started",
+    )
+
+
+def analysis_success_transition(state_doc: dict[str, Any]) -> dict[str, Any]:
+    ensure_analysis_final_compatible(state_doc)
+    return transition_state_document(
+        state_doc,
+        to_state="Reduced_validated",
+        operation="analyze_case",
+        reason="analysis completed and configured reduced outputs validated",
+    )
+
+
+def analysis_failure_transition(state_doc: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    ensure_analysis_final_compatible(state_doc)
+    return transition_state_document(
+        state_doc,
+        to_state="Analysis_failed",
+        operation="analyze_case",
         reason=reason,
     )
