@@ -1535,6 +1535,224 @@ during explicit cleanup execute only
 
 The first real cleanup execute on SUNRISE has not yet been performed.
 
+## Phase C — Simulation lifecycle contract and marker CLIs
+
+Phase C defined and implemented the first generic simulation lifecycle layer.
+
+Purpose:
+
+```text
+Represent simulation execution lifecycle explicitly before writing SUNRISE/SLURM wrappers.
+Keep WarpX/PyWarpX execution external to campaign-workflow.
+Avoid making SLURM the core architecture.
+Preserve Created -> Sim_done backfill for already-existing campaigns.
+Add explicit Submitted / Running / Failed evidence paths.
+```
+
+Implemented documentation:
+
+```text
+docs/SIMULATION_MODULE_CONTRACT.md
+```
+
+This contract defines:
+
+```text
+workflow-owned simulation lifecycle evidence
+external simulation module/wrapper responsibilities
+required marker files
+logging expectations
+environment separation
+scheduler metadata
+preflight semantics
+exit-code semantics
+cleanup safety invariants
+SUNRISE top10 particles example
+```
+
+The contract keeps the separation:
+
+```text
+campaign-workflow-py310    -> workflow orchestration
+guiding-analysis-py310     -> guiding/particle analysis
+warpx-26.05-py314          -> PyWarpX/WarpX simulation execution
+```
+
+Implemented core transition support:
+
+```text
+Created   -> Submitted
+Submitted -> Running
+Running   -> Sim_done
+Running   -> Failed
+Created   -> Sim_done     # legacy/backfill adoption path
+```
+
+Implemented marker CLIs:
+
+```text
+campaign_workflow.cli.mark_sim_submitted
+campaign_workflow.cli.mark_sim_running
+campaign_workflow.cli.mark_sim_failed
+campaign_workflow.cli.mark_sim_done
+```
+
+Implemented simulation helper package:
+
+```text
+campaign_workflow/simulation/
+```
+
+Marker files:
+
+```text
+CASE_DIR/post/sim_submitted.json
+CASE_DIR/post/sim_running.json
+CASE_DIR/post/sim_done.json
+CASE_DIR/post/sim_failed.json
+```
+
+`mark_sim_done` was extended so that it now writes:
+
+```text
+CASE_DIR/post/sim_done.json
+```
+
+in addition to state transition and `validation.json` simulation evidence.
+
+`mark_sim_done` still supports legacy/backfill adoption:
+
+```text
+Created -> Sim_done
+```
+
+using either:
+
+```text
+simulation.completion_marker exists
+OR all required raw diagnostics have at least min_files matching configured globs
+```
+
+It now also supports the managed execution path:
+
+```text
+Running -> Sim_done
+```
+
+This fixed the earlier design mismatch where `Running` was rejected despite being the natural state before successful simulation completion.
+
+Simulation marker evidence updates `validation.json` under:
+
+```text
+validation["simulation"]
+```
+
+and maintains:
+
+```text
+validation["simulation"]["latest"]
+```
+
+Simulation lifecycle evidence alone never authorizes cleanup:
+
+```text
+validation["cleanup"]["cleanup_allowed"] = false
+```
+
+Implemented/updated tests:
+
+```text
+tests/test_simulation_lifecycle.py
+tests/test_simulation_marker_clis.py
+tests/test_mark_sim_done.py
+```
+
+Tests cover:
+
+```text
+Created -> Submitted
+Submitted -> Running
+Running -> Sim_done
+Running -> Failed
+Created -> Sim_done backfill
+marker JSON creation
+validation.json simulation evidence
+validation.json simulation.latest evidence
+dry-run writes nothing
+invalid transitions fail without writing
+cleanup remains blocked
+already Sim_done is no-op success
+```
+
+Latest local suite after this phase:
+
+```text
+Ran 75 tests
+OK
+```
+
+with expected skipped symlink-related tests on Windows depending on permissions.
+
+Real SUNRISE simulation context collected during this phase:
+
+```text
+campaign root: /gpfs/home/jrodriguez/warpx_runs/capillaries_bo_top10_particles
+existing script: submit_top10_particles_array.sh
+execution: sbatch submit_top10_particles_array.sh
+case-local input: CASE_DIR/input.py
+case-local environment: CASE_DIR/case.env
+preflight: CAP_DRY_RUN=1 python input.py 2
+run command: srun -n "${SLURM_NTASKS}" python input.py 2
+case-local logs: CASE_DIR/logs/*.out and CASE_DIR/logs/*.err
+campaign-level logs: CAMPAIGN_ROOT/array_logs/
+```
+
+Real WarpX/PyWarpX environment observed:
+
+```bash
+module purge
+module use ~/apps/modules
+
+module load GCC/12.1.0
+module load Python/3.14.3
+module load OpenBLAS/0.3.31
+module load warpx/26.05-gcc12-openmpi413-all-dims
+
+export PYTHON314_ROOT=/APPS/centos7/centos79/software/Compiler/GCC-12.1/Python/3.14.3
+export LD_LIBRARY_PATH="${PYTHON314_ROOT}/lib:${LD_LIBRARY_PATH:-}"
+
+source ~/apps/venvs/warpx-26.05-py314/bin/activate
+```
+
+There is also a helper environment file:
+
+```text
+~/apps/env/load_sunrise_warpx_py_stack.sh
+```
+
+but it may need operational verification.
+
+Important design decision:
+
+```text
+Do not yet implement a large submitter.
+Do not yet launch a new campaign.
+Do not yet touch WarpX/PyWarpX physics inputs.
+Do not put workflow logic inside SLURM.
+```
+
+Next intended phase:
+
+```text
+Build a thin SUNRISE simulation wrapper around the existing working script pattern.
+Split responsibilities into:
+  - SLURM array selector
+  - case-local WarpX runner
+  - workflow marker CLIs
+Then test on a disposable/small integration campaign before attempting a full simulation->cleanup workflow.
+```
+
+
 ## Future phases recorded historically but not yet completed
 
 These items were discussed as future phases, but are not completed in this history file.

@@ -39,6 +39,7 @@ class MarkSimDoneTests(unittest.TestCase):
 
         state = read_json(case_dir / "state.json")
         validation = read_json(case_dir / "validation.json")
+        marker = read_json(case_dir / "post/sim_done.json")
 
         self.assertEqual(state["state"], "Sim_done")
         self.assertEqual(state["history"][-1]["from"], "Created")
@@ -47,11 +48,31 @@ class MarkSimDoneTests(unittest.TestCase):
 
         self.assertTrue(validation["simulation"]["ok"])
         self.assertEqual(validation["simulation"]["operation"], "mark_sim_done")
+        self.assertEqual(validation["simulation"]["marker_path"], "post/sim_done.json")
+        self.assertEqual(validation["simulation"]["destructive_operations"], 0)
         self.assertGreaterEqual(len(validation["simulation"]["evidence"]), 1)
+
+        latest = validation["simulation"]["latest"]
+        self.assertTrue(latest["ok"])
+        self.assertEqual(latest["operation"], "mark_sim_done")
+        self.assertEqual(latest["state_from"], "Created")
+        self.assertEqual(latest["state_to"], "Sim_done")
+        self.assertEqual(latest["marker_path"], "post/sim_done.json")
+
+        self.assertTrue(marker["ok"])
+        self.assertEqual(marker["operation"], "mark_sim_done")
+        self.assertEqual(marker["case_id"], 0)
+        self.assertEqual(marker["case_name"], "000_fake_case")
+        self.assertEqual(marker["return_code"], 0)
+        self.assertEqual(marker["destructive_operations"], 0)
+        self.assertIn("finished_at", marker)
+        self.assertGreaterEqual(len(marker["evidence"]), 1)
+        self.assertEqual(marker["errors"], [])
+
         self.assertEqual(validation["raw"], {})
         self.assertFalse(validation["cleanup"]["cleanup_allowed"])
 
-    def test_dry_run_does_not_change_state_or_validation(self) -> None:
+    def test_dry_run_does_not_change_state_validation_or_marker(self) -> None:
         case_dir = self.root / "000_fake_case"
         self._write_raw(case_dir, "diags/raw_000.fake", b"fake payload")
 
@@ -64,6 +85,7 @@ class MarkSimDoneTests(unittest.TestCase):
 
         self.assertEqual(state["state"], "Created")
         self.assertNotIn("simulation", validation)
+        self.assertFalse((case_dir / "post/sim_done.json").exists())
         self.assertEqual(validation["raw"], {})
         self.assertFalse(validation["cleanup"]["cleanup_allowed"])
 
@@ -79,13 +101,14 @@ class MarkSimDoneTests(unittest.TestCase):
 
         self.assertEqual(state["state"], "Created")
         self.assertNotIn("simulation", validation)
+        self.assertFalse((case_dir / "post/sim_done.json").exists())
         self.assertEqual(validation["raw"], {})
 
-    def test_completion_marker_is_sufficient_evidence(self) -> None:
+    def test_completion_marker_is_sufficient_evidence_and_is_rewritten_with_full_contract(self) -> None:
         case_dir = self.root / "000_fake_case"
-        marker = case_dir / "post/sim_done.json"
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text('{"ok": true}\n', encoding="utf-8")
+        marker_path = case_dir / "post/sim_done.json"
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.write_text('{"ok": true}\n', encoding="utf-8")
 
         rc = mark_sim_done_main(["--campaign-root", str(self.root), "--case-id", "0"])
 
@@ -93,10 +116,25 @@ class MarkSimDoneTests(unittest.TestCase):
 
         state = read_json(case_dir / "state.json")
         validation = read_json(case_dir / "validation.json")
+        marker = read_json(marker_path)
 
         self.assertEqual(state["state"], "Sim_done")
+
         joined_evidence = "\n".join(validation["simulation"]["evidence"])
         self.assertIn("completion marker exists", joined_evidence)
+
+        self.assertTrue(validation["simulation"]["ok"])
+        self.assertEqual(validation["simulation"]["operation"], "mark_sim_done")
+        self.assertEqual(validation["simulation"]["marker_path"], "post/sim_done.json")
+
+        self.assertTrue(marker["ok"])
+        self.assertEqual(marker["operation"], "mark_sim_done")
+        self.assertEqual(marker["case_id"], 0)
+        self.assertEqual(marker["case_name"], "000_fake_case")
+        self.assertEqual(marker["return_code"], 0)
+        self.assertIn("finished_at", marker)
+        self.assertGreaterEqual(len(marker["evidence"]), 1)
+        self.assertEqual(marker["destructive_operations"], 0)
 
     def test_already_sim_done_case_is_noop_success(self) -> None:
         case_dir = self.root / "000_fake_case"
@@ -106,14 +144,23 @@ class MarkSimDoneTests(unittest.TestCase):
         self.assertEqual(first, 0)
 
         state_before = read_json(case_dir / "state.json")
+        validation_before = read_json(case_dir / "validation.json")
+        marker_before = read_json(case_dir / "post/sim_done.json")
+
         history_len_before = len(state_before["history"])
 
         second = mark_sim_done_main(["--campaign-root", str(self.root), "--case-id", "0"])
         self.assertEqual(second, 0)
 
         state_after = read_json(case_dir / "state.json")
+        validation_after = read_json(case_dir / "validation.json")
+        marker_after = read_json(case_dir / "post/sim_done.json")
+
         self.assertEqual(state_after["state"], "Sim_done")
         self.assertEqual(len(state_after["history"]), history_len_before)
+
+        self.assertEqual(validation_after["simulation"], validation_before["simulation"])
+        self.assertEqual(marker_after, marker_before)
 
     def test_marks_running_case_sim_done_from_raw_diagnostic_evidence(self) -> None:
         case_dir = self.root / "000_fake_case"
@@ -129,12 +176,33 @@ class MarkSimDoneTests(unittest.TestCase):
 
         state_after = read_json(state_path)
         validation = read_json(case_dir / "validation.json")
+        marker = read_json(case_dir / "post/sim_done.json")
 
         self.assertEqual(state_after["state"], "Sim_done")
         self.assertEqual(state_after["history"][-1]["from"], "Running")
         self.assertEqual(state_after["history"][-1]["to"], "Sim_done")
+        self.assertEqual(state_after["history"][-1]["operation"], "mark_sim_done")
+
         self.assertTrue(validation["simulation"]["ok"])
         self.assertEqual(validation["simulation"]["operation"], "mark_sim_done")
+        self.assertEqual(validation["simulation"]["marker_path"], "post/sim_done.json")
+        self.assertEqual(validation["simulation"]["destructive_operations"], 0)
+
+        latest = validation["simulation"]["latest"]
+        self.assertTrue(latest["ok"])
+        self.assertEqual(latest["operation"], "mark_sim_done")
+        self.assertEqual(latest["state_from"], "Running")
+        self.assertEqual(latest["state_to"], "Sim_done")
+        self.assertEqual(latest["marker_path"], "post/sim_done.json")
+
+        self.assertTrue(marker["ok"])
+        self.assertEqual(marker["operation"], "mark_sim_done")
+        self.assertEqual(marker["case_id"], 0)
+        self.assertEqual(marker["case_name"], "000_fake_case")
+        self.assertEqual(marker["return_code"], 0)
+        self.assertEqual(marker["destructive_operations"], 0)
+        self.assertIn("finished_at", marker)
+
         self.assertFalse(validation["cleanup"]["cleanup_allowed"])
 
     def _write_fake_campaign(self) -> None:

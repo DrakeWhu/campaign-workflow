@@ -13,7 +13,12 @@ from campaign_workflow.core.path_safety import (
     resolve_existing_path_inside_case,
     validate_relative_path,
 )
-from campaign_workflow.core.state import get_state_layout, now_utc, validate_state_document, validate_validation_document
+from campaign_workflow.core.state import (
+    get_state_layout,
+    now_utc,
+    validate_state_document,
+    validate_validation_document,
+)
 from campaign_workflow.core.transitions import mark_sim_done_transition, state_name
 from campaign_workflow.core.tsv_cases import CaseRecord, load_campaign_config, load_cases
 
@@ -234,6 +239,9 @@ def mark_one_case_sim_done(
         return result
 
     timestamp = now_utc()
+    marker_rel = _completion_marker_path(config)
+    marker_path = case_dir / marker_rel
+
     reason = (
         "completion evidence found for running simulation case"
         if current == "Running"
@@ -244,6 +252,20 @@ def mark_one_case_sim_done(
         reason=reason,
     )
 
+    marker_doc = {
+        "schema_version": 1,
+        "ok": True,
+        "operation": OPERATION,
+        "case_id": case.case_id,
+        "case_name": case.case_name,
+        "finished_at": timestamp,
+        "return_code": 0,
+        "evidence": evidence["evidence"],
+        "warnings": evidence["warnings"],
+        "errors": [],
+        "destructive_operations": 0,
+    }
+
     updated_validation = copy.deepcopy(validation_doc)
     updated_validation["updated_at"] = timestamp
     updated_validation["simulation"] = {
@@ -251,19 +273,38 @@ def mark_one_case_sim_done(
         "ok": True,
         "marked_at": timestamp,
         "operation": OPERATION,
+        "state_from": current,
+        "state_to": "Sim_done",
+        "marker_path": marker_rel.as_posix(),
         "evidence": evidence["evidence"],
         "warnings": evidence["warnings"],
         "errors": [],
+        "destructive_operations": 0,
+        "latest": {
+            "schema_version": 1,
+            "ok": True,
+            "operation": OPERATION,
+            "state_from": current,
+            "state_to": "Sim_done",
+            "timestamp": timestamp,
+            "marker_path": marker_rel.as_posix(),
+        },
     }
 
     cleanup = updated_validation.setdefault("cleanup", {})
     if isinstance(cleanup, dict):
         cleanup["cleanup_allowed"] = False
-        cleanup["reason"] = "Simulation completion alone does not authorize cleanup. Raw and reduced validation are required."
+        cleanup["reason"] = (
+            "Simulation completion alone does not authorize cleanup. "
+            "Raw and reduced validation are required."
+        )
     else:
         updated_validation["cleanup"] = {
             "cleanup_allowed": False,
-            "reason": "Simulation completion alone does not authorize cleanup. Raw and reduced validation are required.",
+            "reason": (
+                "Simulation completion alone does not authorize cleanup. "
+                "Raw and reduced validation are required."
+            ),
         }
 
     notes = updated_validation.setdefault("notes", [])
@@ -277,11 +318,13 @@ def mark_one_case_sim_done(
         )
 
     result["target_state"] = "Sim_done"
+    result["actions"].append(f"write marker: {marker_path}")
     result["actions"].append(f"write state transition {current} -> Sim_done: {state_path}")
     result["actions"].append(f"write simulation evidence: {validation_path}")
     result["would_mark"] = dry_run
     result["marked"] = not dry_run
 
+    write_json_atomic(marker_path, marker_doc, dry_run=dry_run)
     write_json_atomic(state_path, updated_state, dry_run=dry_run)
     write_json_atomic(validation_path, updated_validation, dry_run=dry_run)
 
@@ -300,12 +343,18 @@ def collect_sim_done_evidence(*, case_dir: Path, config: dict[str, Any]) -> dict
             marker_rel = validate_relative_path(marker, label="simulation.completion_marker")
             marker_path = case_dir / marker_rel
             if marker_path.exists():
-                resolved = resolve_existing_path_inside_case(case_dir, marker_rel, label="simulation.completion_marker")
+                resolved = resolve_existing_path_inside_case(
+                    case_dir,
+                    marker_rel,
+                    label="simulation.completion_marker",
+                )
                 if resolved.is_file():
                     marker_ok = True
                     evidence.append(f"completion marker exists: {marker_rel.as_posix()}")
                 else:
-                    warnings.append(f"completion marker exists but is not a regular file: {marker_rel.as_posix()}")
+                    warnings.append(
+                        f"completion marker exists but is not a regular file: {marker_rel.as_posix()}"
+                    )
             else:
                 warnings.append(f"completion marker not found: {marker_rel.as_posix()}")
         except PathSafetyError as exc:
@@ -316,13 +365,20 @@ def collect_sim_done_evidence(*, case_dir: Path, config: dict[str, Any]) -> dict
     raw_ok = False
     raw_diagnostics = config.get("raw_diagnostics")
     if isinstance(raw_diagnostics, list) and raw_diagnostics:
-        required_diagnostics = [diag for diag in raw_diagnostics if isinstance(diag, dict) and bool(diag.get("required", True))]
+        required_diagnostics = [
+            diag
+            for diag in raw_diagnostics
+            if isinstance(diag, dict) and bool(diag.get("required", True))
+        ]
         if required_diagnostics:
             raw_failures = 0
             for diagnostic in required_diagnostics:
                 name = diagnostic.get("name", "<unnamed>")
                 raw_glob = diagnostic.get("glob")
-                min_files = _nonnegative_int(diagnostic.get("min_files", 1), f"raw_diagnostics[{name!r}].min_files")
+                min_files = _nonnegative_int(
+                    diagnostic.get("min_files", 1),
+                    f"raw_diagnostics[{name!r}].min_files",
+                )
 
                 if not isinstance(raw_glob, str) or not raw_glob.strip():
                     errors.append(f"raw diagnostic {name!r} is missing non-empty glob")
@@ -364,6 +420,13 @@ def collect_sim_done_evidence(*, case_dir: Path, config: dict[str, Any]) -> dict
         "warnings": warnings,
         "errors": errors,
     }
+
+
+def _completion_marker_path(config: dict[str, Any]) -> Path:
+    marker = config.get("simulation", {}).get("completion_marker") if isinstance(config.get("simulation"), dict) else None
+    if not isinstance(marker, str) or not marker.strip():
+        marker = "post/sim_done.json"
+    return validate_relative_path(marker, label="simulation.completion_marker")
 
 
 def _nonnegative_int(value: Any, label: str) -> int:

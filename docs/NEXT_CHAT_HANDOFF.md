@@ -194,6 +194,16 @@ Implemented and tested:
 ```text
 state initialization
 simulation completion backfill
+simulation lifecycle contract documentation
+simulation lifecycle transition helpers
+simulation marker CLIs:
+  mark_sim_submitted
+  mark_sim_running
+  mark_sim_failed
+simulation done marker writing through mark_sim_done
+Created -> Submitted -> Running -> Sim_done lifecycle tests
+Running -> Failed lifecycle tests
+Created -> Sim_done legacy/backfill path preserved
 raw validation
 minimal openpmd_hdf5/HDF5 readability validation
 reduced CSV validation
@@ -210,391 +220,287 @@ cleanup execute local/tests
 
 Cleanup execute exists in code/tests but has intentionally not been run on the real `top10_particles` campaign.
 
-## Real SUNRISE campaign: top10_particles
+## Simulation lifecycle status
 
-Campaign root:
+A stable simulation contract document now exists:
+
+```text
+docs/SIMULATION_MODULE_CONTRACT.md
+```
+
+The current simulation lifecycle is intentionally marker-based and does not yet launch WarpX directly.
+
+Implemented marker CLIs:
+
+```bash
+python -m campaign_workflow.cli.mark_sim_submitted
+python -m campaign_workflow.cli.mark_sim_running
+python -m campaign_workflow.cli.mark_sim_failed
+python -m campaign_workflow.cli.mark_sim_done
+```
+
+Expected state paths:
+
+```text
+Created   -> Submitted
+Submitted -> Running
+Running   -> Sim_done
+Running   -> Failed
+Created   -> Sim_done     # legacy/backfill adoption path
+```
+
+Marker files:
+
+```text
+CASE_DIR/post/sim_submitted.json
+CASE_DIR/post/sim_running.json
+CASE_DIR/post/sim_done.json
+CASE_DIR/post/sim_failed.json
+```
+
+`mark_sim_done` now writes `post/sim_done.json` in addition to updating state and simulation evidence in `validation.json`.
+
+Simulation lifecycle evidence alone never authorizes cleanup. After any simulation marker command:
+
+```text
+validation.cleanup.cleanup_allowed = false
+```
+
+The simulation marker layer does not:
+
+```text
+run WarpX
+run PyWarpX
+submit SLURM jobs
+validate raw diagnostics
+run analysis
+validate reduced outputs
+delete anything
+edit physics inputs
+```
+
+The current tests cover marker creation, state transitions, validation evidence, dry-run behavior, invalid transitions, and no-cleanup invariants.
+
+Standard test command:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+Latest local suite result after simulation marker work:
+
+```text
+Ran 75 tests
+OK
+```
+
+Some symlink-related tests may be skipped on Windows depending on local permissions.
+
+## Real SUNRISE simulation context collected
+
+Current real campaign:
 
 ```text
 /gpfs/home/jrodriguez/warpx_runs/capillaries_bo_top10_particles
 ```
 
-This is the current small real preserved-raw corpus.
+Current campaign-local simulation config includes:
 
-Current physical layout:
-
-```text
-diags/diag1                  # field diagnostics, legacy name
-diags/electron_particles     # particle diagnostic
-guiding_metrics.csv          # official reduced guiding output
+```json
+"simulation": {
+  "backend": "warpx_picmi",
+  "scheduler": "slurm",
+  "input_script": "input.py",
+  "completion_marker": "post/sim_done.json",
+  "failure_marker": "post/sim_failed.json"
+}
 ```
 
-Logical naming for future campaigns:
+Existing working SLURM script for the top10 particle campaign:
 
 ```text
-fields              -> field diagnostics
-plasma_electrons    -> pre-existing / plasma electron particle diagnostics
-ionized_electrons   -> electrons created by ionization
+submit_top10_particles_array.sh
 ```
 
-Do not rename existing directories in `top10_particles`.
+It is a real working script, not architecture doctrine. Do not invent replacements blindly.
 
-Current raw diagnostic contract:
+Current execution pattern:
 
-```text
-name: fields_openpmd
-kind: openpmd_hdf5
-glob: diags/diag1/*.h5
-min_files: 1
-min_age_seconds: 600
-allowed_suffixes: .h5, .hdf5
+```bash
+sbatch submit_top10_particles_array.sh
 ```
 
-Current analysis contract:
+Inside the SLURM array task, the script:
 
 ```text
-analysis.name    = guiding
-analysis.kind    = command
-analysis.adapter = command
-analysis.command = bash <workflow>/examples/capillary_guiding/run_guiding_case_analysis_sunrise.sh {case_dir}
+selects a case row from cases.tsv
+enters CASE_DIR
+sources CASE_DIR/case.env
+creates logs/ diags/ checkpoints/ post/
+checks for existing HDF5 diagnostics and skips if present
+loads the WarpX/PyWarpX environment
+runs CAP_DRY_RUN=1 python input.py 2 as preflight
+runs srun -n "${SLURM_NTASKS}" python input.py 2
 ```
 
-Official reduced output:
+The real simulation command is:
 
-```text
-CASE_DIR/guiding_metrics.csv
+```bash
+srun -n "${SLURM_NTASKS}" python input.py 2
 ```
 
-No alternate `post/guiding_rerun/` output is used. Reanalysis overwrites the official reduced output in place.
+The real WarpX/PyWarpX environment is approximately:
 
-## Real external guiding analysis integration
+```bash
+module purge
+module use ~/apps/modules
 
-The workflow has successfully invoked the real guiding module as an external command adapter on SUNRISE.
+module load GCC/12.1.0
+module load Python/3.14.3
+module load OpenBLAS/0.3.31
+module load warpx/26.05-gcc12-openmpi413-all-dims
 
-No guiding package is imported by `campaign-workflow`.
+export PYTHON314_ROOT=/APPS/centos7/centos79/software/Compiler/GCC-12.1/Python/3.14.3
+export LD_LIBRARY_PATH="${PYTHON314_ROOT}/lib:${LD_LIBRARY_PATH:-}"
 
-Production path:
+source ~/apps/venvs/warpx-26.05-py314/bin/activate
+```
+
+There is also a helper:
 
 ```text
+~/apps/env/load_sunrise_warpx_py_stack.sh
+```
+
+but it may need verification before being used operationally.
+
+Existing SLURM logs live both at campaign level and case level:
+
+```text
+CAMPAIGN_ROOT/array_logs/
+CASE_DIR/logs/
+```
+
+Case-local logs are preferred for workflow evidence.
+
+Example case tree contains:
+
+```text
+CASE_DIR/case.env
+CASE_DIR/input.py
 CASE_DIR/diags/diag1/*.h5
-  -> guiding_analysis_module/scripts/analyze_case.py
-  -> CASE_DIR/guiding_metrics.csv
-  -> campaign_workflow reduced CSV validation
+CASE_DIR/diags/electron_particles/openpmd/*.h5
+CASE_DIR/logs/*.out
+CASE_DIR/logs/*.err
+CASE_DIR/run_info.txt
+CASE_DIR/state.json
+CASE_DIR/validation.json
+CASE_DIR/post/
+CASE_DIR/manifests/
 ```
 
-SUNRISE wrapper:
+The current `top10_particles` campaign should not be used for destructive cleanup. It remains the preserved real raw-HDF5 corpus.
+
+## Next immediate task
+
+The next task is to integrate the simulation marker CLIs into a thin SUNRISE execution path without turning SLURM into the workflow core.
+
+Do not start by launching a full production campaign.
+
+Recommended next step:
 
 ```text
-examples/capillary_guiding/run_guiding_case_analysis_sunrise.sh
+Design a thin case-local WarpX runner wrapper plus a thin SLURM array wrapper.
 ```
 
-First successful real case:
+The intended split is:
 
 ```text
-case_id = 0
-000_from_042_f20_chan_n4e18cm3_L10mm_d500um_focm5mm_rz
+SLURM array selector:
+  - choose CASE_ID / CASE_NAME from cases.tsv
+  - call workflow marker CLIs from campaign-workflow-py310 where appropriate
+  - delegate execution to case-local runner
+
+case-local WarpX runner:
+  - cd CASE_DIR
+  - source case.env
+  - load warpx-26.05-py314 environment
+  - run CAP_DRY_RUN=1 python input.py 2
+  - run srun -n "$SLURM_NTASKS" python input.py 2
+  - keep raw outputs and logs inside CASE_DIR
 ```
 
-Successful command:
+The wrappers should be thin. No raw validation, analysis, reduced validation, cleanup, optimizer logic, or physics logic belongs inside the SLURM script.
 
-```bash
-python -m campaign_workflow.cli.analyze_case \
-  --campaign-root . \
-  --case-id 0 \
-  --allow-rerun-from-raw-delete-eligible \
-  --verbose
-```
+The first operational target should be a disposable or very small integration campaign, not `top10_particles` cleanup.
 
-Observed result:
+## Next workflow goal
+
+The desired complete integration path is:
 
 ```text
-analysis_name=guiding
-analysis_adapter=command
-case_ok=True
-target_state=Reduced_validated
-adapter_ok=True
-OUTPUT: guiding_metrics kind=csv ok=True rows=65 required=True
-destructive_operations=0
+init_case_states
+-> mark_sim_submitted
+-> mark_sim_running
+-> run WarpX/PyWarpX externally
+-> mark_sim_done or mark_sim_failed
+-> validate_raw_case
+-> analyze_case
+-> validate_reduced_case if needed
+-> storage_snapshot
+-> mark_raw_delete_eligible
+-> cleanup_raw_case --dry-run
+-> cleanup_raw_case --execute
 ```
 
-The resulting validation evidence included:
+Cleanup execute should only be tested on a disposable/small integration campaign, not on `top10_particles`.
+
+## Not yet done
+
+Still not implemented:
 
 ```text
-analysis.guiding.ok = True
-analysis.guiding.return_code = 0
-reduced.guiding_metrics.ok = True
-reduced.guiding_metrics.path = guiding_metrics.csv
-reduced.guiding_metrics.row_count = 65
-cleanup.cleanup_allowed = False
-cleanup.delete_manifest_ready = False
-cleanup.previous_cleanup_evidence_invalidated = True
+thin SUNRISE simulation wrapper
+thin SLURM array wrapper using simulation marker CLIs
+fake end-to-end full campaign test from simulation to cleanup
+real disposable SUNRISE integration campaign
+retry policy Failed -> Retryable -> Submitted
+scheduler polling
+automatic job submission from optimizer
+MORBO/BO integration
+ionization campaign
 ```
 
-Note: in `validation.json`, the CSV row-count field is:
+## Next chat priority
+
+Start from the current repo and handoff.
+
+First inspect:
 
 ```text
-row_count
+docs/SIMULATION_MODULE_CONTRACT.md
+campaign_workflow/cli/mark_sim_submitted.py
+campaign_workflow/cli/mark_sim_running.py
+campaign_workflow/cli/mark_sim_failed.py
+campaign_workflow/cli/mark_sim_done.py
+campaign_workflow/simulation/
+tests/test_simulation_lifecycle.py
+tests/test_simulation_marker_clis.py
+tests/test_mark_sim_done.py
 ```
 
-not:
+Then propose the smallest safe integration step.
+
+Expected next implementation options:
 
 ```text
-rows
+A. Add a fake full workflow integration test from simulation markers to cleanup.
+B. Add a thin case-local SUNRISE WarpX runner wrapper, based on the real submit_top10_particles_array.sh.
+C. Add a thin SLURM array wrapper that calls lifecycle marker CLIs.
 ```
 
-The CLI may print `rows=...`, but scripts should read `row_count`.
+Do not choose B or C without preserving the existing working SUNRISE behavior and keeping wrappers visible/auditable.
 
-## Analysis rerun policy
-
-Reanalysis from final-ish states must be explicit.
-
-Supported explicit rerun flags:
-
-```bash
---allow-rerun-from-raw-delete-eligible
---allow-rerun-from-reduced-validated
-```
-
-Reason: preserved raw diagnostics may need to be reanalyzed after external analysis-module changes.
-
-Allowed successful rerun transitions:
-
-```text
-Raw_delete_eligible -> Analyzing -> Reduced_validated
-Reduced_validated   -> Analyzing -> Reduced_validated
-Analysis_failed     -> Analyzing -> Reduced_validated
-```
-
-Reanalysis must:
-
-```text
-verify raw validation evidence
-verify preserved raw files still exist
-reject legacy reduced-only cases
-reject cases with raw_deleted evidence
-write stdout/stderr logs
-overwrite/update configured reduced outputs
-revalidate reduced outputs
-end in Reduced_validated on success
-end in Analysis_failed on failure
-keep cleanup blocked
-invalidate previous cleanup eligibility / delete manifest readiness
-```
-
-If a case has been reanalyzed, raw cleanup must not use old eligibility/manifests. To clean later, rerun:
-
-```bash
-python -m campaign_workflow.cli.mark_raw_delete_eligible ...
-python -m campaign_workflow.cli.cleanup_raw_case --dry-run ...
-```
-
-Do not execute cleanup on `top10_particles` for now.
-
-## Analysis module contract
-
-A stable contract document should exist:
-
-```text
-docs/ANALYSIS_MODULE_CONTRACT.md
-```
-
-Summary of the required architecture:
-
-```text
-An analysis module must provide a case-local CLI or wrapper command.
-It must accept explicit case paths.
-It must write configured reduced outputs under CASE_DIR.
-It must return 0 on successful execution and non-zero on failure.
-It must not modify workflow state files.
-It must not delete raw diagnostics.
-It must not manage cleanup manifests.
-It should run in its own virtual environment.
-campaign-workflow invokes it through the generic command adapter and then validates the outputs.
-```
-
-This contract is mandatory for future modules:
-
-```text
-guiding analysis
-particle analysis
-ionized-electron analysis
-future non-guiding diagnostics
-```
-
-## Legacy full campaign
-
-Legacy campaign root:
-
-```text
-/gpfs/home/jrodriguez/warpx_runs/capillaries_bo_full_campaign
-```
-
-This campaign has no preserved raw diagnostics but has reduced CSV outputs.
-
-It was adopted with:
-
-```bash
-python -m campaign_workflow.cli.validate_reduced_case \
-  --campaign-root . \
-  --legacy-reduced-only
-```
-
-Final result:
-
-```text
-states: {'Reduced_validated': 351}
-guiding_metrics reduced ok: 351
-legacy reduced-only: 351
-raw nonempty: 0
-cleanup_allowed: 0
-```
-
-Meaning:
-
-```text
-reduced CSVs are valid
-raw diagnostics are not validated
-raw cleanup must remain impossible
-```
-
-Never convert a legacy reduced-only campaign into raw-validated state unless real raw diagnostics exist and pass raw validation.
-
-## Storage / cleanup status
-
-On `top10_particles`, storage snapshot previously found:
-
-```text
-case_count=10
-validated_cases=10
-submitted_cases=10
-case_total_GB=39.808848
-raw_live_GB=36.532526
-safe_cleanup_candidate_GB=36.532526
-avg_raw_per_case_GB=3.653253
-```
-
-Cleanup dry-run manifests were created previously:
-
-```text
-10/10 cases had manifests/raw_delete_manifest.json
-0 raw files deleted
-0 directories deleted
-```
-
-After analysis reruns, previous cleanup eligibility/manifests may be invalidated. Do not execute cleanup until eligibility and dry-run manifests are regenerated deliberately.
-
-## Current immediate tasks
-
-1. Finish/verify the SUNRISE test for:
-
-```bash
-python -m campaign_workflow.cli.analyze_case \
-  --campaign-root . \
-  --case-id 0 \
-  --allow-rerun-from-reduced-validated \
-  --verbose
-```
-
-Expected result:
-
-```text
-Reduced_validated -> Analyzing -> Reduced_validated
-adapter_ok=True
-guiding_metrics.csv overwritten/revalidated
-cleanup_allowed=False
-```
-
-2. Finish/verify guiding reanalysis for remaining `top10_particles` cases.
-
-Check final campaign state:
-
-```bash
-python - <<'PY'
-import json
-from pathlib import Path
-from collections import Counter
-
-states = Counter()
-analysis_ok = Counter()
-reduced_ok = Counter()
-cleanup_allowed = Counter()
-
-for case_dir in sorted(p for p in Path(".").iterdir() if p.is_dir() and (p / "state.json").exists()):
-    state = json.loads((case_dir / "state.json").read_text(encoding="utf-8-sig"))
-    validation = json.loads((case_dir / "validation.json").read_text(encoding="utf-8-sig"))
-
-    states[state.get("state")] += 1
-    analysis_ok[validation.get("analysis", {}).get("guiding", {}).get("ok")] += 1
-    reduced_ok[validation.get("reduced", {}).get("guiding_metrics", {}).get("ok")] += 1
-    cleanup_allowed[validation.get("cleanup", {}).get("cleanup_allowed")] += 1
-
-print("states =", dict(states))
-print("analysis.guiding.ok =", dict(analysis_ok))
-print("reduced.guiding_metrics.ok =", dict(reduced_ok))
-print("cleanup_allowed =", dict(cleanup_allowed))
-PY
-```
-
-3. Commit the external-analysis/rerun/documentation work locally.
-
-Suggested commit:
-
-```bash
-git status
-python -m unittest discover -s tests -p "test_*.py"
-git add campaign_workflow tests docs examples README.md
-git commit -m "Document and extend external analysis workflow"
-git log --oneline -5
-```
-
-4. Decide whether to add a thin SLURM wrapper for analysis arrays.
-
-The SLURM wrapper should only call:
-
-```bash
-python -m campaign_workflow.cli.analyze_case ...
-```
-
-No core logic belongs in SLURM.
-
-Before writing operational SLURM wrappers, ask for existing working SUNRISE SLURM files if needed.
-
-5. After analysis integration is stable, define the simulation lifecycle evidence contract.
-
-## Next major phase — simulation lifecycle contract
-
-Do not jump to a new ionization campaign yet.
-
-Before SLURM simulation wrappers, define generic simulation evidence:
-
-```text
-Submitted
-Running
-Sim_done
-Failed
-Retryable
-post/sim_submitted.json
-post/sim_running.json or logs/sim_runtime.json
-post/sim_done.json
-post/sim_failed.json
-scheduler_job_id
-submit_command
-run_command
-environment_name
-started_at
-finished_at
-return_code
-stdout/stderr log paths
-```
-
-The simulation backend should be external-command based at first:
-
-```text
-campaign_workflow runs or wraps a configured command
-the PyWarpX/simulation module remains separate
-SLURM remains an execution backend, not the whole architecture
-```
-
-Do not edit PyWarpX input templates unless explicitly requested.
 
 ## Later integration campaign
 
