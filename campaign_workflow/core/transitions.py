@@ -46,6 +46,10 @@ RAW_DELETE_ELIGIBILITY_FINAL_STATES = {
     "Raw_delete_eligible",
 }
 
+RAW_DELETE_EXECUTE_COMPATIBLE_STATES = {
+    "Raw_delete_eligible",
+}
+
 def state_name(state_doc: dict[str, Any]) -> str:
     state = state_doc.get("state")
     if not isinstance(state, str):
@@ -255,4 +259,24 @@ def raw_delete_eligible_transition(state_doc: dict[str, Any]) -> dict[str, Any]:
         to_state="Raw_delete_eligible",
         operation="mark_raw_delete_eligible",
         reason="raw and reduced evidence allow entering cleanup dry-run phase",
+    )
+
+
+def ensure_raw_delete_execute_compatible(state_doc: dict[str, Any]) -> None:
+    current = state_name(state_doc)
+    if current not in RAW_DELETE_EXECUTE_COMPATIBLE_STATES:
+        allowed = ", ".join(sorted(RAW_DELETE_EXECUTE_COMPATIBLE_STATES))
+        raise ValueError(
+            f"raw delete execute is not allowed from state {current!r}; "
+            f"allowed states: {allowed}"
+        )
+
+
+def raw_deleted_transition(state_doc: dict[str, Any]) -> dict[str, Any]:
+    ensure_raw_delete_execute_compatible(state_doc)
+    return transition_state_document(
+        state_doc,
+        to_state="Raw_deleted",
+        operation="cleanup_raw_case",
+        reason="raw cleanup executed from validated dry-run manifest",
     )

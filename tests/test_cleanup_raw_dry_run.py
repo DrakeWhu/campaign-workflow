@@ -370,6 +370,140 @@ class CleanupRawDryRunTests(unittest.TestCase):
         }
         write_json_atomic(case_dir / "post/raw_delete_eligible.json", marker)
 
+    def test_execute_deletes_only_manifest_files_and_marks_raw_deleted(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._write_file(case_dir, "diags/raw_000.fake", b"a" * 10)
+        self._write_file(case_dir, "keep/reduced.csv", b"iteration,score\n0,1\n")
+        self._make_raw_delete_eligible(case_dir, candidate_count=1, candidate_bytes=10)
+
+        rc = cleanup_raw_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(rc, 0)
+
+        rc = cleanup_raw_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--execute",
+            ]
+        )
+        self.assertEqual(rc, 0)
+
+        state = read_json(case_dir / "state.json")
+        validation = read_json(case_dir / "validation.json")
+        deleted = read_json(case_dir / "post/raw_deleted.json")
+
+        self.assertEqual(state["state"], "Raw_deleted")
+        self.assertFalse((case_dir / "diags/raw_000.fake").exists())
+        self.assertTrue((case_dir / "diags").exists())
+        self.assertTrue((case_dir / "keep/reduced.csv").exists())
+        self.assertTrue((case_dir / "manifests/raw_delete_manifest.json").exists())
+
+        self.assertFalse(validation["cleanup"]["cleanup_allowed"])
+        self.assertTrue(validation["cleanup"]["raw_deleted"])
+        self.assertEqual(validation["cleanup"]["deleted_file_count"], 1)
+        self.assertEqual(validation["cleanup"]["deleted_total_size_bytes"], 10)
+        self.assertEqual(validation["cleanup"]["delete_manifest_mode"], "executed")
+        self.assertFalse(validation["cleanup"]["execute_required"])
+        self.assertEqual(validation["cleanup"]["destructive_operations"], 1)
+
+        self.assertEqual(deleted["deleted_file_count"], 1)
+        self.assertEqual(deleted["deleted_total_size_bytes"], 10)
+        self.assertEqual(deleted["destructive_operations"], 1)
+        self.assertFalse(deleted["directory_delete_allowed"])
+
+    def test_execute_without_manifest_is_rejected(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._write_file(case_dir, "diags/raw_000.fake", b"a" * 10)
+        self._make_raw_delete_eligible(case_dir, candidate_count=1, candidate_bytes=10)
+
+        rc = cleanup_raw_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--execute",
+            ]
+        )
+
+        self.assertEqual(rc, 1)
+        self.assertTrue((case_dir / "diags/raw_000.fake").exists())
+        self.assertFalse((case_dir / "post/raw_deleted.json").exists())
+
+    def test_execute_rejects_manifest_size_mismatch(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._write_file(case_dir, "diags/raw_000.fake", b"a" * 10)
+        self._make_raw_delete_eligible(case_dir, candidate_count=1, candidate_bytes=10)
+
+        rc = cleanup_raw_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(rc, 0)
+
+        self._write_file(case_dir, "diags/raw_000.fake", b"changed-size")
+
+        rc = cleanup_raw_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--execute",
+            ]
+        )
+
+        self.assertEqual(rc, 1)
+        self.assertTrue((case_dir / "diags/raw_000.fake").exists())
+        self.assertFalse((case_dir / "post/raw_deleted.json").exists())
+
+    def test_execute_rejects_extra_reinterpreted_files(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._write_file(case_dir, "diags/raw_000.fake", b"a" * 10)
+        self._make_raw_delete_eligible(case_dir, candidate_count=1, candidate_bytes=10)
+
+        rc = cleanup_raw_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(rc, 0)
+
+        self._write_file(case_dir, "diags/raw_001.fake", b"b" * 5)
+
+        rc = cleanup_raw_case_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--execute",
+            ]
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertFalse((case_dir / "diags/raw_000.fake").exists())
+        self.assertTrue((case_dir / "diags/raw_001.fake").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
