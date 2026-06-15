@@ -218,8 +218,10 @@ def mark_one_case_sim_done(
         result["actions"].append(f"state already at or after Sim_done: {current}")
         return result
 
-    if current != "Created":
-        result["errors"].append(f"cannot mark simulation done from state {current!r}; expected 'Created'")
+    if current not in {"Created", "Running"}:
+        result["errors"].append(
+            f"cannot mark simulation done from state {current!r}; expected one of: Created, Running"
+        )
         return result
 
     evidence = collect_sim_done_evidence(case_dir=case_dir, config=config)
@@ -232,9 +234,14 @@ def mark_one_case_sim_done(
         return result
 
     timestamp = now_utc()
+    reason = (
+        "completion evidence found for running simulation case"
+        if current == "Running"
+        else "completion evidence found for existing campaign case"
+    )
     updated_state = mark_sim_done_transition(
         state_doc,
-        reason="completion evidence found for existing campaign case",
+        reason=reason,
     )
 
     updated_validation = copy.deepcopy(validation_doc)
@@ -270,7 +277,7 @@ def mark_one_case_sim_done(
         )
 
     result["target_state"] = "Sim_done"
-    result["actions"].append(f"write state transition Created -> Sim_done: {state_path}")
+    result["actions"].append(f"write state transition {current} -> Sim_done: {state_path}")
     result["actions"].append(f"write simulation evidence: {validation_path}")
     result["would_mark"] = dry_run
     result["marked"] = not dry_run

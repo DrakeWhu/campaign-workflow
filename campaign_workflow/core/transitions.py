@@ -50,6 +50,24 @@ RAW_DELETE_EXECUTE_COMPATIBLE_STATES = {
     "Raw_delete_eligible",
 }
 
+SIMULATION_SUBMIT_COMPATIBLE_STATES = {
+    "Created",
+    "Retryable",
+}
+
+SIMULATION_RUNNING_COMPATIBLE_STATES = {
+    "Submitted",
+}
+
+SIMULATION_FINAL_COMPATIBLE_STATES = {
+    "Running",
+}
+
+MARK_SIM_DONE_COMPATIBLE_STATES = {
+    "Created",
+    "Running",
+}
+
 def state_name(state_doc: dict[str, Any]) -> str:
     state = state_doc.get("state")
     if not isinstance(state, str):
@@ -104,6 +122,34 @@ def ensure_analysis_final_compatible(state_doc: dict[str, Any]) -> None:
     if current not in ANALYSIS_FINAL_COMPATIBLE_STATES:
         allowed = ", ".join(sorted(ANALYSIS_FINAL_COMPATIBLE_STATES))
         raise ValueError(f"analysis finalization is not allowed from state {current!r}; allowed states: {allowed}")
+    
+
+def ensure_simulation_submit_compatible(state_doc: dict[str, Any]) -> None:
+    current = state_name(state_doc)
+    if current not in SIMULATION_SUBMIT_COMPATIBLE_STATES:
+        allowed = ", ".join(sorted(SIMULATION_SUBMIT_COMPATIBLE_STATES))
+        raise ValueError(f"simulation submission is not allowed from state {current!r}; allowed states: {allowed}")
+
+
+def ensure_simulation_running_compatible(state_doc: dict[str, Any]) -> None:
+    current = state_name(state_doc)
+    if current not in SIMULATION_RUNNING_COMPATIBLE_STATES:
+        allowed = ", ".join(sorted(SIMULATION_RUNNING_COMPATIBLE_STATES))
+        raise ValueError(f"simulation running mark is not allowed from state {current!r}; allowed states: {allowed}")
+
+
+def ensure_simulation_final_compatible(state_doc: dict[str, Any]) -> None:
+    current = state_name(state_doc)
+    if current not in SIMULATION_FINAL_COMPATIBLE_STATES:
+        allowed = ", ".join(sorted(SIMULATION_FINAL_COMPATIBLE_STATES))
+        raise ValueError(f"simulation finalization is not allowed from state {current!r}; allowed states: {allowed}")
+
+
+def ensure_mark_sim_done_compatible(state_doc: dict[str, Any]) -> None:
+    current = state_name(state_doc)
+    if current not in MARK_SIM_DONE_COMPATIBLE_STATES:
+        allowed = ", ".join(sorted(MARK_SIM_DONE_COMPATIBLE_STATES))
+        raise ValueError(f"mark_sim_done is not allowed from state {current!r}; allowed states: {allowed}")    
 
 
 def transition_state_document(
@@ -201,10 +247,38 @@ def legacy_reduced_validation_failure_transition(state_doc: dict[str, Any]) -> d
     )
 
 
+def simulation_submit_transition(state_doc: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    ensure_simulation_submit_compatible(state_doc)
+    return transition_state_document(
+        state_doc,
+        to_state="Submitted",
+        operation="mark_sim_submitted",
+        reason=reason,
+    )
+
+
+def simulation_running_transition(state_doc: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    ensure_simulation_running_compatible(state_doc)
+    return transition_state_document(
+        state_doc,
+        to_state="Running",
+        operation="mark_sim_running",
+        reason=reason,
+    )
+
+
+def simulation_failure_transition(state_doc: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    ensure_simulation_final_compatible(state_doc)
+    return transition_state_document(
+        state_doc,
+        to_state="Failed",
+        operation="mark_sim_failed",
+        reason=reason,
+    )
+
+
 def mark_sim_done_transition(state_doc: dict[str, Any], *, reason: str) -> dict[str, Any]:
-    current = state_name(state_doc)
-    if current != "Created":
-        raise ValueError(f"mark_sim_done is not allowed from state {current!r}; allowed state: Created")
+    ensure_mark_sim_done_compatible(state_doc)
     return transition_state_document(
         state_doc,
         to_state="Sim_done",

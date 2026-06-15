@@ -115,7 +115,7 @@ class MarkSimDoneTests(unittest.TestCase):
         self.assertEqual(state_after["state"], "Sim_done")
         self.assertEqual(len(state_after["history"]), history_len_before)
 
-    def test_running_state_is_rejected_without_writing(self) -> None:
+    def test_marks_running_case_sim_done_from_raw_diagnostic_evidence(self) -> None:
         case_dir = self.root / "000_fake_case"
         state_path = case_dir / "state.json"
         state = read_json(state_path)
@@ -125,13 +125,17 @@ class MarkSimDoneTests(unittest.TestCase):
 
         rc = mark_sim_done_main(["--campaign-root", str(self.root), "--case-id", "0"])
 
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 0)
 
         state_after = read_json(state_path)
         validation = read_json(case_dir / "validation.json")
 
-        self.assertEqual(state_after["state"], "Running")
-        self.assertNotIn("simulation", validation)
+        self.assertEqual(state_after["state"], "Sim_done")
+        self.assertEqual(state_after["history"][-1]["from"], "Running")
+        self.assertEqual(state_after["history"][-1]["to"], "Sim_done")
+        self.assertTrue(validation["simulation"]["ok"])
+        self.assertEqual(validation["simulation"]["operation"], "mark_sim_done")
+        self.assertFalse(validation["cleanup"]["cleanup_allowed"])
 
     def _write_fake_campaign(self) -> None:
         campaign = {
