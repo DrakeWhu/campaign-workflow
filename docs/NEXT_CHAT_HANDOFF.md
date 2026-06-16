@@ -695,3 +695,153 @@ Do not modify WarpX/PyWarpX physics inputs.
 
 Do not prepare the ionization campaign inside `campaign-workflow`; Juan will
 prepare the physical input/template and case definitions separately.
+
+## Latest completed phase — explicit case directory materialization
+
+A new generic workflow phase has been implemented and committed:
+
+```text
+campaign_workflow/core/case_dirs.py
+campaign_workflow/cli/create_case_dirs.py
+tests/test_create_case_dirs.py
+```
+
+The new CLI is:
+
+```bash
+python -m campaign_workflow.cli.create_case_dirs \
+  --campaign-root . \
+  --dry-run \
+  --verbose
+```
+
+and in write mode:
+
+```bash
+python -m campaign_workflow.cli.create_case_dirs \
+  --campaign-root . \
+  --verbose
+```
+
+This phase creates the case directory layout from `cases.tsv`, before `init_case_states`.
+
+The intended bootstrap sequence is now:
+
+```bash
+python -m campaign_workflow.cli.create_case_dirs \
+  --campaign-root . \
+  --dry-run \
+  --verbose
+
+python -m campaign_workflow.cli.create_case_dirs \
+  --campaign-root . \
+  --verbose
+
+python -m campaign_workflow.cli.init_case_states \
+  --campaign-root . \
+  --verbose
+```
+
+`create_case_dirs` is intentionally generic. It only knows about campaign configuration, case manifests, case names, path safety, and standard case directories.
+
+It creates:
+
+```text
+CASE_DIR/
+├── logs/
+├── post/
+├── manifests/
+├── locks/
+├── diags/
+└── checkpoints/
+```
+
+It does not create or modify:
+
+```text
+state.json
+validation.json
+cases.tsv
+campaign.json
+input_template.py
+input.py
+case.env
+raw diagnostics
+reduced outputs
+```
+
+It also does not implement:
+
+```text
+simulation execution
+analysis execution
+SLURM submission
+WarpX/PyWarpX input preparation
+cases.tsv -> environment variable mapping
+BO/MORBO
+cleanup
+```
+
+The previous manual SUNRISE prototype that materialized cases must only be treated as context for what not to put in the generic core. That script mixed directory creation with copying `input_template.py`, generating `case.env`, and physical/capillary-specific `CAP_*` environment variables. That logic is intentionally excluded from `create_case_dirs`.
+
+Latest known test status after this phase:
+
+```text
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+Result:
+
+```text
+OK
+```
+
+## Next immediate task
+
+Deploy or pull the latest committed `campaign-workflow` repo on SUNRISE and test the new explicit case directory materialization phase on a real campaign root.
+
+Expected operational sequence on SUNRISE:
+
+```bash
+cd /path/to/CAMPAIGN_ROOT
+
+python -m campaign_workflow.cli.create_case_dirs \
+  --campaign-root . \
+  --dry-run \
+  --verbose
+
+python -m campaign_workflow.cli.create_case_dirs \
+  --campaign-root . \
+  --verbose
+
+python -m campaign_workflow.cli.init_case_states \
+  --campaign-root . \
+  --verbose
+```
+
+After running this, inspect the resulting campaign layout before touching simulation execution or SLURM.
+
+The next development step after this bootstrap check is likely a separate, explicit, campaign-specific preparation layer if needed. That future layer may eventually handle things like:
+
+```text
+copying or linking input_template.py
+creating case-local input.py
+generating case.env
+mapping selected cases.tsv columns into environment variables
+```
+
+But that must not be folded into `create_case_dirs`.
+
+Do not implement yet:
+
+```text
+simulation execution
+analysis/guiding logic
+particle reduction
+ionization-specific logic
+SLURM orchestration
+BO/MORBO
+cleanup extensions
+```
+
+Do not modify WarpX/PyWarpX physics inputs inside `campaign-workflow`.

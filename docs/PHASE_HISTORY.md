@@ -1960,3 +1960,168 @@ examples/sunrise/submit_case_cycle_array.sh
 
 This wrapper should execute one full case-local cycle and must not include
 optimizer/MORBO logic or edit WarpX/PyWarpX physics inputs.
+
+## Phase E — Explicit case directory materialization from `cases.tsv`
+
+A missing bootstrap phase was identified while preparing real WarpX/SUNRISE campaigns.
+
+Before this phase, `campaign-workflow` already had logic for state initialization, validation, analysis, storage snapshots, and cleanup planning/execution, but it did not yet own the generic creation of case directories from `cases.tsv`.
+
+This caused an architectural problem: the WarpX runner expected case directories to exist, but the workflow did not yet provide a clean generic way to create them.
+
+A previous one-off SUNRISE prototype script had attempted to materialize cases, but it mixed too many responsibilities:
+
+```text
+created case directories
+copied input_template.py
+generated case.env
+mapped cases.tsv columns into CAP_* environment variables
+included capillary/guiding/ionization-specific assumptions
+```
+
+That prototype was useful as operational context, but it was rejected as a workflow-core design.
+
+The correct architectural decision was to first implement a minimal generic phase:
+
+```text
+create case directories from cases.tsv
+do it safely
+do it idempotently
+do not touch physics-specific files
+do not touch simulation execution
+do not touch analysis
+do not touch cleanup
+```
+
+Implemented files:
+
+```text
+campaign_workflow/core/case_dirs.py
+campaign_workflow/cli/create_case_dirs.py
+tests/test_create_case_dirs.py
+```
+
+New CLI:
+
+```bash
+python -m campaign_workflow.cli.create_case_dirs \
+  --campaign-root . \
+  --dry-run \
+  --verbose
+```
+
+Write mode:
+
+```bash
+python -m campaign_workflow.cli.create_case_dirs \
+  --campaign-root . \
+  --verbose
+```
+
+Intended campaign bootstrap sequence:
+
+```bash
+python -m campaign_workflow.cli.create_case_dirs \
+  --campaign-root . \
+  --dry-run \
+  --verbose
+
+python -m campaign_workflow.cli.create_case_dirs \
+  --campaign-root . \
+  --verbose
+
+python -m campaign_workflow.cli.init_case_states \
+  --campaign-root . \
+  --verbose
+```
+
+Behavior implemented:
+
+```text
+read campaign.json
+read cases.tsv using the configured manifest parser
+identify CASE_ID and CASE_NAME
+reject missing or empty case manifests
+reject invalid CASE_ID values through existing manifest checks
+reject empty CASE_NAME values
+reject duplicate CASE_NAME values
+reject absolute CASE_NAME paths
+reject CASE_NAME values containing ..
+reject any resolved case path outside campaign_root
+create CASE_DIR
+create standard subdirectories
+be idempotent
+print a clear summary
+report destructive_operations=0
+```
+
+Standard subdirectories created:
+
+```text
+logs/
+post/
+manifests/
+locks/
+diags/
+checkpoints/
+```
+
+Negative contract:
+
+```text
+create_case_dirs does not modify cases.tsv
+create_case_dirs does not modify campaign.json
+create_case_dirs does not copy input_template.py
+create_case_dirs does not create input.py
+create_case_dirs does not create case.env
+create_case_dirs does not map physical columns into environment variables
+create_case_dirs does not write state.json
+create_case_dirs does not write validation.json
+create_case_dirs does not touch raw diagnostics
+create_case_dirs does not touch reduced outputs
+create_case_dirs does not run simulation
+create_case_dirs does not run analysis
+create_case_dirs does not run cleanup
+```
+
+Test coverage added:
+
+```text
+dry-run does not create directories
+write mode creates directories from CASE_NAME
+standard subdirectories are created
+second execution is idempotent
+CASE_NAME with .. is rejected
+absolute CASE_NAME is rejected
+duplicate CASE_NAME is rejected
+empty CASE_NAME is rejected
+cases.tsv without rows is rejected
+existing files inside CASE_DIR are preserved
+new code is checked against rm -rf / shutil.rmtree
+summary includes destructive_operations=0
+```
+
+Latest known test command:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+Latest known result:
+
+```text
+OK
+```
+
+Next operational step:
+
+```text
+pull the committed repo on SUNRISE
+activate the campaign-workflow Python environment
+run create_case_dirs --dry-run on a real campaign root
+run create_case_dirs in write mode if dry-run is correct
+run init_case_states after directories exist
+inspect the resulting case layout before simulation execution
+```
+
+Simulation-specific materialization remains future work. In particular, copying/linking `input_template.py`, generating `case.env`, or mapping `cases.tsv` columns into environment variables must be implemented later as a separate auditable layer if needed.

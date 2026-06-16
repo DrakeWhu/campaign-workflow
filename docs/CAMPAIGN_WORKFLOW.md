@@ -43,6 +43,107 @@ campaign_root/
 
 Case directories are addressed through the `case_id_column` and `case_name_column` defined in `campaign.json`.
 
+## Case directory materialization
+
+Before case states are initialized, campaign case directories are created explicitly from the immutable case manifest.
+
+The intended bootstrap sequence for a new campaign is:
+
+```bash
+python -m campaign_workflow.cli.create_case_dirs \
+  --campaign-root . \
+  --dry-run \
+  --verbose
+
+python -m campaign_workflow.cli.create_case_dirs \
+  --campaign-root . \
+  --verbose
+
+python -m campaign_workflow.cli.init_case_states \
+  --campaign-root . \
+  --verbose
+```
+
+`create_case_dirs` is a minimal, generic, non-physical workflow phase.
+
+It reads:
+
+```text
+campaign.json
+cases.tsv
+```
+
+It uses the configured case manifest parser to identify:
+
+```text
+CASE_ID
+CASE_NAME
+```
+
+It validates that:
+
+```text
+cases.tsv exists
+cases.tsv contains at least one row
+CASE_ID values are valid according to the existing manifest parser
+CASE_NAME values are not empty
+CASE_NAME values are not duplicated
+CASE_NAME values are relative paths
+CASE_NAME values do not contain ..
+resolved case directories stay inside campaign_root
+```
+
+In write mode, it creates:
+
+```text
+CASE_DIR/
+├── logs/
+├── post/
+├── manifests/
+├── locks/
+├── diags/
+└── checkpoints/
+```
+
+The command is idempotent:
+
+```text
+existing case directories are accepted
+existing subdirectories are accepted
+existing files are not overwritten
+nothing is deleted
+destructive_operations=0
+```
+
+This phase deliberately does not create or modify:
+
+```text
+state.json
+validation.json
+cases.tsv
+campaign.json
+input_template.py
+input.py
+case.env
+raw diagnostics
+reduced outputs
+```
+
+This phase also deliberately does not implement:
+
+```text
+WarpX/PyWarpX input preparation
+SLURM submitter generation
+case.env generation
+cases.tsv -> environment variable mapping
+simulation execution
+analysis execution
+BO/MORBO logic
+cleanup
+```
+
+Simulation-specific materialization, such as copying `input_template.py`, generating `case.env`, or mapping physical columns from `cases.tsv` into environment variables, belongs in a later campaign-specific preparation layer, not in this generic workflow phase.
+
 ## Case directory ownership
 
 Each case owns its own runtime artifacts:
