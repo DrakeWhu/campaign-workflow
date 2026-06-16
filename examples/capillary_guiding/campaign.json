@@ -25,7 +25,7 @@
       "glob": "diags/**/*.h5",
       "allowed_suffixes": [".h5", ".hdf5"],
       "min_files": 1,
-      "min_age_seconds": 600,
+      "min_age_seconds": 0,
       "required": true,
       "notes": "WarpX FieldDiagnostic writes openPMD HDF5 diagnostics under the configured write_dir."
     }

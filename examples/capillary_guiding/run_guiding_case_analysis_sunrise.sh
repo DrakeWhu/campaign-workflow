@@ -36,3 +36,11 @@ python scripts/analyze_case.py \
     --outdir "${CASE_DIR}" \
     --overwrite \
     --no-plots
+
+export CAMPAIGN_RUN_PARTICLE_ANALYSIS="${CAMPAIGN_RUN_PARTICLE_ANALYSIS:-auto}"
+
+python "${SCRIPT_DIR}/run_particle_analysis_if_available.py" \
+    "${CASE_DIR}" \
+    --analysis-root "${GUIDING_ANALYSIS_ROOT}" \
+    --mode "${CAMPAIGN_RUN_PARTICLE_ANALYSIS}" \
+    --python-executable "$(command -v python)"

@@ -52,9 +52,18 @@ shopt -s nullglob globstar
 existing_h5=(diags/**/*.h5 diags/**/*.hdf5)
 
 if (( ${#existing_h5[@]} > 0 )); then
-    echo "[WARPX-RUNNER] SKIP: existing HDF5 diagnostics found in $(pwd)"
-    printf '  %s\n' "${existing_h5[@]}"
-    exit 0
+    echo "[WARPX-RUNNER] Existing HDF5 diagnostics found in $(pwd)" >&2
+    printf '  %s\n' "${existing_h5[@]}" >&2
+
+    if [[ "${WARPX_SKIP_IF_H5_EXISTS:-0}" == "1" ]]; then
+        echo "[WARPX-RUNNER] SKIP explicitly allowed by WARPX_SKIP_IF_H5_EXISTS=1"
+        exit 0
+    fi
+
+    echo "[WARPX-RUNNER] ERROR: refusing to treat pre-existing HDF5 files as a successful simulation." >&2
+    echo "[WARPX-RUNNER] This may be a previous partial/failed run. Inspect the case before rerunning." >&2
+    echo "[WARPX-RUNNER] To intentionally adopt existing HDF5 diagnostics, use workflow validation/backfill tools, not this runner." >&2
+    exit 1
 fi
 
 if ! type module >/dev/null 2>&1; then
