@@ -2125,3 +2125,238 @@ inspect the resulting case layout before simulation execution
 ```
 
 Simulation-specific materialization remains future work. In particular, copying/linking `input_template.py`, generating `case.env`, or mapping `cases.tsv` columns into environment variables must be implemented later as a separate auditable layer if needed.
+
+## Phase F — Real CLPU particle campaign production run on SUNRISE
+
+A real production campaign was launched on SUNRISE:
+
+```text
+/HOME/jrodriguez/warpx_runs/capillaries_bo_particles_campaign
+
+This was the first campaign where the managed case-local cycle was exercised
+against a full real WarpX/PyWarpX workload with cleanup execute enabled.
+
+Campaign ingredients:
+
+351 cases in cases.tsv
+WarpX/PyWarpX input_template.py
+case-local input.py and case.env materialized per case
+fields diagnostic under diags/fields
+plasma electron diagnostic under diags/plasma_electrons for non-vac cases
+guiding_metrics.csv reduced output
+particle_analysis/particle_summary.csv reduced output for non-vac cases
+
+The campaign used separated environments:
+
+campaign-workflow-py310    -> workflow orchestration
+warpx-26.05-py314          -> PyWarpX/WarpX simulation execution
+guiding-analysis-py310     -> guiding/particle analysis
+
+The case-local SLURM cycle executed:
+
+mark_sim_submitted
+mark_sim_running
+run_warpx_case_sunrise.sh
+mark_sim_done / mark_sim_failed
+validate_raw_case
+analyze_case
+mark_raw_delete_eligible
+cleanup_raw_case --dry-run
+cleanup_raw_case --execute
+
+Cleanup execute was intentionally enabled for this production campaign because
+raw HDF5 volume would otherwise approach quota limits overnight.
+
+Observed production behavior:
+
+SLURM arrays launched with non-vac and vac cases separated
+non-vac cases used CAMPAIGN_RUN_PARTICLE_ANALYSIS=always
+vac cases used CAMPAIGN_RUN_PARTICLE_ANALYSIS=never
+cleanup execute produced raw_deleted.json markers
+guiding_metrics.csv count matched Raw_deleted total
+particle_summary.csv count matched non-vac Raw_deleted count
+sim_failed markers initially remained zero
+quota remained controlled because raw cleanup executed as cases finished
+
+This demonstrated that the workflow can run:
+
+simulation
+-> raw validation
+-> guiding analysis
+-> particle analysis
+-> reduced validation
+-> cleanup dry-run
+-> cleanup execute
+
+inside a real SUNRISE campaign.
+
+Phase G — Production monitoring scripts and reduced-data candidate discovery
+
+During the campaign, temporary monitoring scripts were created in the campaign
+root:
+
+watch_campaign.py
+estimate_running_eta.py
+rank_combined_candidates.py
+
+These scripts were not committed architecture, but they provided useful evidence
+for future formal workflow CLIs.
+
+watch_campaign.py monitored:
+
+SLURM running/pending jobs
+workflow states
+states by PLASMA_KIND
+states by PLATEAU_LENGTH_MM
+guiding_metrics.csv count
+particle_summary.csv count
+raw_delete_manifest.json count
+raw_deleted.json count
+live HDF5 count and size
+real user quota
+
+The working quota command on SUNRISE was:
+
+lfs quota -h -u "$USER" .
+
+rank_combined_candidates.py showed that even early f20 cases produced useful
+electron reduced metrics.
+
+A first strong region appeared around:
+
+n0 ≈ 6e18 cm^-3
+L ≈ 10 mm
+diameter ≈ 500 um
+focus ≈ 0 to +5 mm
+
+Example useful metrics from particle_summary.csv:
+
+charge_hot_pC
+n_macroparticles_hot
+Emax_hot_MeV
+E95_hot_MeV
+Emean_hot_MeV
+q_long_mean_hot_mm
+u_long_mean_hot
+
+This changed the role of the workflow: it is no longer only a safe file/state
+manager. It now produces persistent reduced data that can support real candidate
+selection and future Bayesian optimization.
+
+Phase H — Walltime risk discovered in real production
+
+The real campaign discovered that a static T6H walltime is insufficient for some
+long cases.
+
+Some 25 mm cases had:
+
+max_steps = 448000
+avg_s_per_step ≈ 0.07
+
+Estimated WarpX runtime:
+
+448000 * 0.07 s ≈ 8.7 h
+
+before analysis and cleanup.
+
+An ad-hoc ETA script classified running cases as:
+
+OK
+TIGHT
+TIMEOUT_RISK
+UNKNOWN
+
+using:
+
+current_step
+max_steps
+avg_s_per_step
+elapsed walltime
+remaining walltime
+safety margin
+
+This revealed the need for a future formal walltime guard.
+
+The intended future feature is a campaign maintenance tick that can:
+
+acquire a campaign-wide lock
+detect cases that cannot finish within the current walltime
+cancel those jobs before scheduler kill
+mark them as walltime_insufficient
+write explicit failure evidence
+clean partial raw files through a dedicated partial-raw cleanup manifest
+plan reruns in a longer partition
+submit rerun arrays if configured
+
+This should be implemented in campaign-workflow, not in guiding_analysis.
+
+The feature must remain generic and scheduler-policy driven. It must not know
+about capillary physics.
+
+Phase I — Future cooperative maintenance architecture
+
+The production campaign motivated a new architecture pattern:
+
+case-local jobs perform their own work
+then attempt a campaign-wide maintenance tick
+
+The tick is cooperative, short-lived, and lock-protected.
+
+It is not a parent daemon.
+
+It may eventually include:
+
+quota_guard
+walltime_guard
+orphan_running_guard
+rerun_planner
+rerun_launcher
+array_throttle_adjuster
+optimizer_readiness_check
+
+This preserves the no-daemon design while allowing the campaign to self-repair
+and self-regulate during long unattended SUNRISE runs.
+
+Important rule:
+
+a case job does not own other cases;
+a locked campaign maintenance operation may inspect and modify multiple cases
+according to workflow rules.
+
+Future implementation should probably introduce:
+
+campaign_workflow.cli.estimate_walltime_risk
+campaign_workflow.cli.maintenance_tick
+campaign_workflow.cli.plan_reruns
+
+and tests using unittest.
+
+No OpenCode was used for this workflow.
+
+
+---
+
+## 9. `README.md`
+
+Add this short section after `## Design principle`.
+
+```markdown
+## Production lesson: cooperative maintenance without a daemon
+
+A real SUNRISE WarpX/PyWarpX campaign showed that long campaigns need more than a
+static SLURM array.
+
+The workflow direction is now:
+
+```text
+case-local cycle
++ short lock-protected campaign maintenance ticks
+
+Case-local tasks run simulation, validation, analysis, and cleanup for one case.
+
+After finishing, a task may attempt a campaign-wide maintenance tick. If it gets
+the campaign lock, it may inspect quota, walltime risk, stale running cases, and
+rerun plans. If it does not get the lock, it exits normally.
+
+This preserves the no-resident-daemon rule while allowing unattended campaigns to
+self-regulate on HPC systems.

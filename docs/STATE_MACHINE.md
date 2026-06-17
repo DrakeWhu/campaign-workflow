@@ -151,6 +151,76 @@ Examples:
 - missing dependency
 - walltime exceeded but restart/checkpoint is possible
 
+### Walltime-insufficient failures
+
+A case may fail because the requested walltime is insufficient even though the
+simulation itself is healthy.
+
+In V1 this does not require a new top-level state. It can be represented as:
+
+```text
+Running -> Failed
+
+with explicit failure metadata:
+
+{
+  "failure_kind": "walltime_insufficient",
+  "retry_recommended": true,
+  "recommended_partition": "T12H",
+  "current_step": 219396,
+  "max_steps": 448000,
+  "avg_s_per_step": 0.0742,
+  "eta_remaining_hours": 4.71
+}
+
+A later phase may introduce a more explicit state such as:
+
+Walltime_insufficient
+Rerun_planned
+Partial_raw_cleaned
+
+but the first implementation should avoid expanding the state machine unless the
+workflow needs those states for safe transitions.
+
+Walltime-insufficient cases are not successful simulations. They must not advance
+to:
+
+Sim_done
+Raw_validated
+Analyzing
+Reduced_validated
+Raw_delete_eligible
+Raw_deleted
+
+unless the simulation is rerun and finishes successfully.
+
+Running orphan / stale scheduler state
+
+If SLURM kills a job by walltime, the case-local script may not have time to call
+mark_sim_failed.
+
+In that case, state.json may still say:
+
+Running
+
+even though no corresponding SLURM job exists.
+
+This is a stale state and should be handled as:
+
+Running -> Stale
+
+or manually inspected and then transitioned to Failed with an explicit reason.
+
+A future maintenance tick should detect this by checking:
+
+state.json says Running
+scheduler job/task no longer exists
+post/sim_done.json does not exist
+post/sim_failed.json does not exist
+logs indicate interruption or incomplete simulation
+
+Such a case must not be cleaned using the normal success cleanup path.
+
 ### Stale
 
 The state claims an operation is in progress, but the associated lock or job appears expired

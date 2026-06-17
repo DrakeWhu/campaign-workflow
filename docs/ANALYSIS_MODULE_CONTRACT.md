@@ -250,3 +250,79 @@ The workflow command is:
 ```
 
 This is an example adapter stack, not a core workflow dependency.
+
+## Particle-analysis extension in capillary guiding
+
+The capillary guiding wrapper may also invoke an external particle-analysis
+entrypoint after field/guiding analysis.
+
+This remains an external analysis-module responsibility. `campaign-workflow`
+does not parse particle HDF5 files or implement particle physics internally.
+
+The production pattern is:
+
+```text
+CASE_DIR/diags/fields or CASE_DIR/diags/diag1
+  -> field/guiding analysis
+  -> CASE_DIR/guiding_metrics.csv
+
+CASE_DIR/diags/plasma_electrons
+  -> particle analysis
+  -> CASE_DIR/particle_analysis/particle_summary.csv
+  -> optional plots under CASE_DIR/particle_analysis/plots/
+
+The wrapper may support:
+
+CAMPAIGN_RUN_PARTICLE_ANALYSIS=auto|always|never
+
+Recommended semantics:
+
+auto   -> run particle analysis if CASE_DIR/diags/plasma_electrons exists
+always -> fail if CASE_DIR/diags/plasma_electrons does not exist
+never  -> skip particle analysis
+
+For campaigns containing vacuum cases, particle_summary.csv should usually be
+declared optional globally unless the workflow supports conditional reduced
+outputs by case metadata.
+
+Example reduced output contract:
+
+{
+  "name": "particle_summary",
+  "kind": "csv",
+  "path": "particle_analysis/particle_summary.csv",
+  "min_rows": 1,
+  "required_columns": [
+    "iteration",
+    "selection_mode",
+    "selected_particle_iteration",
+    "n_macroparticles_hot",
+    "weight_hot",
+    "charge_hot_pC",
+    "Emax_MeV",
+    "E95_MeV",
+    "Emax_hot_MeV",
+    "Emean_hot_MeV",
+    "q_long_mean_hot_mm",
+    "u_long_mean_hot"
+  ],
+  "required": false
+}
+
+Useful electron reduced metrics observed in production include:
+
+n_macroparticles_hot
+weight_hot
+charge_hot_pC
+Emax_hot_MeV
+E95_hot_MeV
+Emean_hot_MeV
+q_long_mean_hot_mm
+q_long_min_hot_mm
+q_long_max_hot_mm
+u_long_mean_hot
+u_long_max_hot
+
+The reduced CSV is enough for first-pass candidate selection. Richer diagnostics
+such as transverse phase spaces, divergence, and emittance should be produced in
+targeted reruns of promising cases, not necessarily for every campaign case.

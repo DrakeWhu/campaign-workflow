@@ -217,6 +217,162 @@ A launcher may submit one or more jobs and exit immediately. Such a launcher is
 not a resident orchestrator. It must not occupy a long walltime partition while
 waiting or polling.
 
+## Cooperative campaign maintenance ticks
+
+A real SUNRISE production campaign showed that the workflow also needs
+lock-protected campaign maintenance operations.
+
+A maintenance tick is a short campaign-wide operation that may be invoked by a
+case-local SLURM task after it finishes its own case-local cycle.
+
+The key rule is:
+
+```text
+case-local work remains case-local;
+campaign-wide maintenance must acquire a campaign-wide lock.
+
+A case job may attempt to launch a maintenance tick, but the tick is not owned by
+that case. It is a campaign operation executed under a campaign lock.
+
+This avoids a resident parent daemon while still allowing the campaign to
+self-maintain.
+
+A maintenance tick may eventually inspect:
+
+quota usage
+live raw HDF5 size
+running jobs
+stale Running cases
+walltime risk
+rerun candidates
+SLURM array throttles
+validated reduced outputs
+optimizer readiness
+
+It may eventually perform safe campaign-wide actions such as:
+
+lowering or raising array throttles
+marking cases as walltime_insufficient
+canceling jobs that cannot finish within walltime
+planning reruns in a longer partition
+submitting rerun arrays
+creating quota/walltime reports
+
+A maintenance tick must not:
+
+act without a campaign-wide lock
+edit WarpX/PyWarpX physics inputs
+modify cases.tsv in place
+delete directories
+delete files outside CASE_DIR
+delete raw files without an explicit manifest
+reinterpret cleanup globs at execute time
+silently retry cases
+become a resident daemon
+run BO/MORBO as part of a case-local cycle
+
+The maintenance tick is allowed to write into multiple case directories only
+because it is a campaign-wide locked operation, not because one case owns another
+case's files.
+
+This is the intended future pattern:
+
+case-local cycle finishes
+  -> attempts maintenance_tick
+  -> if campaign lock is available:
+       inspect campaign
+       apply safe maintenance actions
+       release lock
+     else:
+       another job is maintaining the campaign; exit OK
+Walltime guard
+
+The first real production campaign showed that walltime cannot always be chosen
+statically.
+
+For example, a 25 mm WarpX case with:
+
+max_steps = 448000
+avg_s_per_step ≈ 0.07
+
+requires roughly:
+
+448000 * 0.07 s ≈ 8.7 h
+
+before analysis and cleanup. Such a case does not fit in a T6H partition even if
+shorter cases in the same campaign do.
+
+A future walltime guard should estimate, for every Running case:
+
+current_step
+max_steps
+avg_s_per_step
+elapsed_walltime
+remaining_walltime
+safety_margin
+eta_remaining
+
+and classify the case as:
+
+OK
+TIGHT
+TIMEOUT_RISK
+UNKNOWN
+
+If a case is clearly unable to finish within the current walltime, a future active
+guard may:
+
+cancel the SLURM array task
+mark the case as failed with failure_kind=walltime_insufficient
+record the current progress estimate
+clean partial raw files using a special partial-raw cleanup manifest
+mark the case as rerun-planned
+submit the case again in a longer partition
+
+This must be explicit and auditable. The workflow must not silently retry.
+
+Rerun planning
+
+Rerun planning is a campaign-wide operation.
+
+The workflow should eventually support generating rerun batches from cases whose
+failure evidence indicates that rerun is safe and useful.
+
+A rerun plan should record:
+
+source campaign
+case IDs
+previous partition/time limit
+recommended partition/time limit
+failure_kind
+reason for rerun
+whether partial raw was cleaned
+submission command or sbatch job id
+
+Rerun planning must not modify the original cases.tsv in place. If new
+candidate cases are created by an optimizer, they must be written into a new
+batch manifest.
+
+Quota guard
+
+A quota guard is another campaign maintenance operation.
+
+It should inspect real user quota, not only filesystem capacity. On SUNRISE the
+working command for the current filesystem was:
+
+lfs quota -h -u "$USER" .
+
+The guard may eventually:
+
+report used/quota/limit
+report live raw HDF5 size
+delay new submissions if quota is high
+lower SLURM array throttles
+prioritize cleanup of already validated cases
+stop launching reruns if quota is unsafe
+
+Quota pressure alone must not justify unsafe deletion. Cleanup rules still apply.
+
 ## Data clases
 
 The workflow distinguishes three levels of data.

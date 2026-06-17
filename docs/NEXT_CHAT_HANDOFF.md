@@ -222,6 +222,186 @@ thin case-local SUNRISE WarpX runner wrapper
 
 Cleanup execute exists in code/tests but has intentionally not been run on the real `top10_particles` campaign.
 
+## Latest real production result — CLPU particle campaign on SUNRISE
+
+A real production campaign was launched on SUNRISE:
+
+```text
+/HOME/jrodriguez/warpx_runs/capillaries_bo_particles_campaign
+
+The campaign used:
+
+campaign-workflow-py310    -> workflow orchestration
+warpx-26.05-py314          -> PyWarpX/WarpX simulation
+guiding-analysis-py310     -> guiding and particle analysis
+
+The campaign validated the managed case-local cycle in production:
+
+SLURM array task
+-> mark_sim_submitted
+-> mark_sim_running
+-> run WarpX/PyWarpX
+-> mark_sim_done
+-> validate_raw_case
+-> analyze_case
+-> validate reduced outputs
+-> mark_raw_delete_eligible
+-> cleanup_raw_case --dry-run
+-> cleanup_raw_case --execute
+-> Raw_deleted
+
+Important production facts:
+
+cases.tsv had 351 cases
+campaign contained chan, uni, and vac cases
+non-vac cases used particle analysis
+vac cases skipped particle analysis
+cleanup execute was enabled deliberately
+raw HDF5 cleanup worked in production
+guiding_metrics.csv was produced and validated
+particle_summary.csv was produced and validated for non-vac cases
+quota remained under control using live cleanup
+
+The particle analysis produced useful first-pass beam metrics, including:
+
+charge_hot_pC
+n_macroparticles_hot
+Emax_hot_MeV
+E95_hot_MeV
+Emean_hot_MeV
+q_long_mean_hot_mm
+u_long_mean_hot
+
+Early f20 cases already showed strong electron production in the region:
+
+n0 ≈ 6e18 cm^-3
+L ≈ 10 mm
+diameter ≈ 500 um
+focus around 0 to +5 mm
+
+These are not final optimization results; they are evidence that the workflow now
+produces scientifically useful reduced data.
+
+Production issue discovered — walltime risk
+
+The real campaign discovered that static walltime selection is insufficient.
+
+Some L25 cases had:
+
+max_steps = 448000
+avg_s_per_step ≈ 0.07
+
+which implies roughly 8–9 hours of WarpX runtime before analysis and cleanup.
+These cases do not fit in T6H.
+
+An ad-hoc ETA script classified running cases as:
+
+OK
+TIGHT
+TIMEOUT_RISK
+UNKNOWN
+
+using:
+
+current_step
+max_steps
+avg_s_per_step
+elapsed walltime
+remaining walltime
+safety margin
+
+This should become a formal workflow feature.
+
+Next architectural priority
+
+Implement a lock-protected campaign maintenance tick.
+
+The maintenance tick should be a short campaign-wide operation, not a resident
+daemon.
+
+It may be invoked by case-local jobs after they finish their own cycle.
+
+Future maintenance tick responsibilities:
+
+acquire campaign-wide lock
+inspect quota
+inspect live raw HDF5 size
+detect Running orphan cases
+estimate walltime risk for active cases
+mark walltime-insufficient cases
+plan reruns in longer partitions
+submit rerun arrays if enabled
+adjust SLURM array throttles if quota policy requires it
+release lock
+
+The maintenance tick must not:
+
+edit WarpX/PyWarpX physics inputs
+modify cases.tsv in place
+delete directories
+delete raw data without a manifest
+delete while a job is running
+become a daemon
+run BO/MORBO inside case-local jobs
+
+A first implementation should probably add:
+
+campaign_workflow.cli.estimate_walltime_risk
+campaign_workflow.cli.maintenance_tick
+campaign_workflow.cli.plan_reruns
+
+Use unittest tests and keep the implementation generic.
+
+Real monitoring scripts used during production
+
+Temporary campaign-local scripts were useful and should inform future formal CLIs:
+
+watch_campaign.py
+estimate_running_eta.py
+rank_combined_candidates.py
+
+They should not be treated as final architecture, but their logic is valuable.
+
+Observed useful monitoring quantities:
+
+SLURM running/pending counts
+workflow states by PLASMA_KIND
+workflow states by PLATEAU_LENGTH_MM
+guiding_metrics.csv count
+particle_summary.csv count
+raw_delete_manifest.json count
+raw_deleted.json count
+live HDF5 count and size
+real user quota via lfs quota
+failed cases
+non-vac completed cases missing particle_summary.csv
+
+Working quota command on SUNRISE:
+
+lfs quota -h -u "$USER" .
+Important caution for reruns
+
+If a job is killed by SLURM walltime, the case may remain in:
+
+Running
+
+because the script may not get time to call mark_sim_failed.
+
+Future code must detect stale/orphan Running cases by comparing:
+
+state.json
+post/sim_done.json
+post/sim_failed.json
+SLURM active job/task list
+logs
+raw outputs
+
+Do not relaunch a case with partial HDF5 files unless the case has been explicitly
+prepared for rerun.
+
+The WarpX runner must not treat pre-existing HDF5 files as a successful
+simulation unless an explicit adoption/backfill path is being used.
+
 ## Simulation lifecycle status
 
 A stable simulation contract document now exists:
@@ -845,3 +1025,4 @@ cleanup extensions
 ```
 
 Do not modify WarpX/PyWarpX physics inputs inside `campaign-workflow`.
+

@@ -410,6 +410,72 @@ not sufficient to validate raw diagnostics.
 After `Sim_done`, the raw validation phase must still check configured raw
 diagnostics.
 
+## Walltime-aware simulation execution
+
+A simulation wrapper may be walltime-aware.
+
+The workflow should eventually support a walltime guard that estimates whether a
+running simulation can finish before the scheduler kills the job.
+
+For WarpX/PyWarpX this can be estimated from simulation logs containing values
+such as:
+
+```text
+STEP <N> ends
+Avg. per step = <seconds>
+max_steps = <M>
+
+A generic walltime estimate is:
+
+remaining_steps = max_steps - current_step
+eta_remaining = remaining_steps * avg_s_per_step
+
+The simulation is at risk if:
+
+eta_remaining + safety_margin > walltime_remaining
+
+If this condition is detected, the wrapper or a campaign maintenance tick may
+eventually stop the case before scheduler walltime kills it.
+
+The first implementation should not silently retry. It should record explicit
+failure evidence.
+
+Recommended post/sim_failed.json fields for this case:
+
+{
+  "schema_version": 1,
+  "ok": false,
+  "operation": "mark_sim_failed",
+  "failure_kind": "walltime_insufficient",
+  "current_partition": "T6H",
+  "recommended_partition": "T12H",
+  "current_step": 219396,
+  "max_steps": 448000,
+  "avg_s_per_step": 0.0742,
+  "eta_remaining_hours": 4.71,
+  "walltime_remaining_hours": 1.44,
+  "safety_margin_hours": 0.35,
+  "partial_raw_cleanup_recommended": true
+}
+
+The workflow must distinguish:
+
+simulation failed because physics/code crashed
+simulation failed because walltime was insufficient
+simulation was killed by scheduler before failure evidence could be written
+simulation is stale/running orphan
+
+These cases may have different retry policies.
+
+A future retry planner may use failure_kind=walltime_insufficient to recommend
+rerunning in a longer partition, for example:
+
+T6H  -> T12H
+T12H -> T24H
+T24H -> T48H
+
+This is scheduler policy, not physics logic, and must remain configurable.
+
 ## Managed case-cycle execution
 
 The simulation lifecycle may be used as the first part of a managed case-local

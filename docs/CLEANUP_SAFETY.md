@@ -58,6 +58,81 @@ cleanup log
 
 Cleanup has two modes.
 
+## Partial raw cleanup for failed/rerun cases
+
+The normal cleanup path is only for successful cases:
+
+```text
+Sim_done
+-> Raw_validated
+-> Reduced_validated
+-> Raw_delete_eligible
+-> cleanup dry-run manifest
+-> cleanup execute
+-> Raw_deleted
+
+A different cleanup mode may be needed for failed or aborted simulations that
+left partial raw diagnostics on disk.
+
+This must be treated as a separate operation from normal success cleanup.
+
+Suggested name:
+
+partial_raw_cleanup
+
+Partial raw cleanup may only be allowed when all are true:
+
+the case is not running
+there is scheduler evidence that the job is gone or was canceled
+the case is in Failed, Retryable, Stale, or an explicit walltime/rerun state
+failure_kind is compatible with deleting partial raw
+the cleanup target is explicitly configured
+a partial-raw cleanup manifest is written before deletion
+every path is inside CASE_DIR
+every path is a regular file
+no directory deletion is attempted
+no symlink escape is possible
+
+Partial raw cleanup must not pretend that the case was successfully reduced.
+
+It must not write:
+
+post/raw_deleted.json
+
+because raw_deleted.json is reserved for successful raw cleanup after validated
+reduced outputs.
+
+Instead, it should write a distinct marker such as:
+
+post/partial_raw_deleted.json
+
+and a distinct manifest such as:
+
+manifests/partial_raw_delete_manifest.json
+
+The marker should record:
+
+{
+  "schema_version": 1,
+  "operation": "partial_raw_cleanup",
+  "reason": "walltime_insufficient",
+  "files_deleted": 123,
+  "total_size_bytes": 123456789,
+  "safe_to_rerun": true
+}
+
+Partial raw cleanup does not make the case scientifically complete. Its purpose is
+only to free quota and make a clean rerun possible.
+
+Absolute prohibitions still apply:
+
+do not delete directories
+do not delete outside CASE_DIR
+do not delete undeclared files
+do not use rm -rf
+do not delete while scheduler says the job is running
+do not delete from Quarantined cases
+
 ### Dry-run
 
 Dry-run:

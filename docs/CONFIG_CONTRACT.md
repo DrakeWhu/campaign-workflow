@@ -162,6 +162,61 @@ Hard rules:
 - cleanup may not delete paths outside the case directory
 - cleanup may not follow symlink escapes
 
+## Optional maintenance section
+
+Future versions may support a campaign maintenance section.
+
+This section is not required for V1. If absent, no automatic maintenance tick,
+walltime guard, quota guard, or rerun launcher is enabled.
+
+Example:
+
+```json
+{
+  "maintenance": {
+    "enabled": false,
+    "lock_name": "campaign_maintenance",
+    "walltime_guard": {
+      "enabled": false,
+      "safety_margin_minutes": 30,
+      "risk_threshold": "TIMEOUT_RISK",
+      "failure_kind": "walltime_insufficient",
+      "partition_escalation": {
+        "T6H": {
+          "partition": "T12H",
+          "time": "12:00:00"
+        },
+        "T12H": {
+          "partition": "T24H",
+          "time": "24:00:00"
+        }
+      }
+    },
+    "quota_guard": {
+      "enabled": false,
+      "command": ["lfs", "quota", "-h", "-u", "{user}", "{campaign_root}"],
+      "soft_used_fraction": 0.80,
+      "hard_used_fraction": 0.90
+    },
+    "rerun_launcher": {
+      "enabled": false,
+      "max_cases_per_tick": 50,
+      "submit_command_template": [
+        "sbatch",
+        "--partition={partition}",
+        "--time={time}",
+        "--array={array_spec}",
+        "{case_cycle_script}"
+      ]
+    }
+  }
+}
+
+Maintenance configuration must remain generic.
+
+It must not contain capillary physics assumptions. It may contain scheduler policy,
+quota policy, walltime policy, and rerun policy.
+
 ## Git reproducibility metadata
 
 Every job should eventually record the workflow commit:
