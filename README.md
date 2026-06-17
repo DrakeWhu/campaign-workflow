@@ -61,3 +61,23 @@ python -m campaign_workflow.cli.<command> --campaign-root .
 - cleanup target: raw HDF5 files after validation.
 
 This example is not the core architecture.
+
+## Production lesson: cooperative maintenance without a daemon
+
+A real SUNRISE WarpX/PyWarpX campaign showed that long campaigns need more than a
+static SLURM array.
+
+The workflow direction is now:
+
+```text
+case-local cycle
++ short lock-protected campaign maintenance ticks
+
+Case-local tasks run simulation, validation, analysis, and cleanup for one case.
+
+After finishing, a task may attempt a campaign-wide maintenance tick. If it gets
+the campaign lock, it may inspect quota, walltime risk, stale running cases, and
+rerun plans. If it does not get the lock, it exits normally.
+
+This preserves the no-resident-daemon rule while allowing unattended campaigns to
+self-regulate on HPC systems.
