@@ -72,6 +72,7 @@ The workflow direction is now:
 ```text
 case-local cycle
 + short lock-protected campaign maintenance ticks
+```
 
 Case-local tasks run simulation, validation, analysis, and cleanup for one case.
 
@@ -81,3 +82,6 @@ rerun plans. If it does not get the lock, it exits normally.
 
 This preserves the no-resident-daemon rule while allowing unattended campaigns to
 self-regulate on HPC systems.
+
+- [Optimization module contract](docs/OPTIMIZATION_MODULE_CONTRACT.md): file-based contract for external optimizers that consume validated reduced outputs and propose candidate batches without launching simulations or reading raw diagnostics.
+- [Candidate batch contract](docs/CANDIDATE_BATCH_CONTRACT.md): artifact contract for optimizer iterations, recommended candidates, launchable candidate batches, and future campaign preparation.
