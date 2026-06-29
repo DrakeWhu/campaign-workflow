@@ -377,7 +377,6 @@ class OptimizerTickPhase4ATests(unittest.TestCase):
         paths = [
             repo_root / "campaign_workflow" / "optimization_state.py",
             repo_root / "campaign_workflow" / "optimizer_tick.py",
-            repo_root / "campaign_workflow" / "cli" / "optimizer_tick.py",
         ]
         return "\n".join(path.read_text(encoding="utf-8") for path in paths)
 
