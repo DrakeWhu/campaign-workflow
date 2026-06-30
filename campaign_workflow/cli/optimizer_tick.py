@@ -24,6 +24,16 @@ from campaign_workflow.reconcile_iteration import (
     reconcile_iteration,
     update_state_after_reconcile,
 )
+from campaign_workflow.propose_next_iteration import (
+    ProposeNextIterationError,
+    build_propose_next_iteration_plan,
+    init_next_case_states,
+    materialize_next_campaign,
+    prepare_next_campaign_from_optimizer_outputs,
+    run_external_optimizer_command,
+    update_state_after_next_iteration,
+    verify_optimizer_outputs,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--action",
-        choices=["submit_iteration", "reconcile_iteration"],
+        choices=["submit_iteration", "reconcile_iteration", "propose_next_iteration"],
         default=None,
         help="Explicit action to plan or execute after the finite audit.",
     )
@@ -84,6 +94,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--job-name",
         default=None,
         help="Optional SLURM job name. Defaults to cw_iter_XXX_cycle.",
+    )
+    parser.add_argument(
+        "--from-iteration",
+        type=int,
+        default=None,
+        help="Source iteration for propose_next_iteration, for example 0 for iter_000.",
+    )
+    parser.add_argument(
+        "--next-iteration",
+        type=int,
+        default=None,
+        help="Target iteration for propose_next_iteration. Defaults to from_iteration + 1.",
+    )
+    parser.add_argument(
+        "--optimization-config",
+        type=Path,
+        default=None,
+        help="Optional optimization.json path for propose_next_iteration. Defaults to OPTIMIZATION_ROOT/optimization.json.",
     )
 
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -198,6 +226,83 @@ def main(argv: list[str] | None = None) -> int:
                     summary["mode"] = "dry-run"
                     summary["state_written"] = False
 
+            elif args.action == "propose_next_iteration":
+                state_info = read_optimization_state(optimization_root)
+                if not state_info.exists or state_info.data is None:
+                    raise ProposeNextIterationError(
+                        "optimization_state.json is required for propose_next_iteration"
+                    )
+
+                plan = build_propose_next_iteration_plan(
+                    tick_summary=summary,
+                    state_doc=state_info.data,
+                    optimization_root=optimization_root,
+                    from_iteration=int(args.from_iteration),
+                    next_iteration=args.next_iteration,
+                    optimization_config_path=args.optimization_config,
+                )
+
+                summary["action"] = "propose_next_iteration"
+                summary["propose_next_iteration_plan"] = plan.to_dict()
+                summary["optimizer_outputs_if_executed"] = {
+                    "candidate_batch": str(plan.candidate_batch),
+                    "batch_campaign_plan": str(plan.batch_campaign_plan),
+                }
+
+                if args.execute:
+                    optimizer_result = run_external_optimizer_command(plan)
+                    optimizer_outputs = verify_optimizer_outputs(plan)
+                    preparation_result = prepare_next_campaign_from_optimizer_outputs(
+                        plan
+                    )
+
+                    materialization_result = None
+                    if plan.materialize_after_prepare:
+                        materialization_result = materialize_next_campaign(plan)
+
+                    init_states_result = None
+                    if plan.init_case_states_after_materialize:
+                        init_states_result = init_next_case_states(plan)
+
+                    next_audit = run_optimizer_tick(
+                        optimization_root=optimization_root,
+                        iteration=plan.next_iteration,
+                    )
+                    next_iterations = next_audit.get("iterations", [])
+                    if len(next_iterations) != 1:
+                        raise ProposeNextIterationError(
+                            "failed to audit prepared next iteration: "
+                            f"expected 1 iteration summary, got {len(next_iterations)}"
+                        )
+
+                    new_state = update_state_after_next_iteration(
+                        state_doc=state_info.data,
+                        plan=plan,
+                        optimizer_result=optimizer_result,
+                        optimizer_outputs=optimizer_outputs,
+                        preparation_result=preparation_result,
+                        materialization_result=materialization_result,
+                        init_states_result=init_states_result,
+                        next_iteration_summary=next_iterations[0],
+                    )
+                    write_optimization_state(optimization_root, new_state)
+
+                    summary["mode"] = "execute"
+                    summary["state_written"] = True
+                    summary["external_optimizer_result"] = optimizer_result.to_dict()
+                    summary["optimizer_outputs"] = optimizer_outputs
+                    summary["campaign_preparation_result"] = preparation_result
+                    summary["materialization_result"] = materialization_result
+                    summary["init_case_states_result"] = init_states_result
+                    summary["next_iteration_audit"] = next_iterations[0]
+                    summary["optimization_state_after_propose"] = new_state
+                    summary["recommended_action"] = "submit_iteration"
+                    summary["stopped_before_submit"] = True
+                else:
+                    summary["mode"] = "dry-run"
+                    summary["state_written"] = False
+                    summary["execution_enabled_in_this_phase"] = True
+
             elif args.init_state:
                 if state_path.exists():
                     print(
@@ -229,6 +334,7 @@ def main(argv: list[str] | None = None) -> int:
         OptimizationStateError,
         SubmitIterationError,
         ReconcileIterationError,
+        ProposeNextIterationError,
     ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
@@ -241,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _validate_args(args: argparse.Namespace) -> str | None:
-    action_args = [
+    submit_args = [
         args.array_spec,
         args.max_cases,
         args.submit_script,
@@ -249,11 +355,23 @@ def _validate_args(args: argparse.Namespace) -> str | None:
         args.workflow_env,
         args.job_name,
     ]
+    propose_args = [
+        args.from_iteration,
+        args.next_iteration,
+        args.optimization_config,
+    ]
+
     if (
-        any(value is not None for value in action_args)
+        any(value is not None for value in submit_args)
         and args.action != "submit_iteration"
     ):
         return "submit options require --action submit_iteration"
+
+    if (
+        any(value is not None for value in propose_args)
+        and args.action != "propose_next_iteration"
+    ):
+        return "propose-next-iteration options require --action propose_next_iteration"
 
     if args.action == "submit_iteration":
         if args.iteration is None:
@@ -271,8 +389,23 @@ def _validate_args(args: argparse.Namespace) -> str | None:
                 "--action reconcile_iteration supports only --dry-run or --write-state"
             )
 
-    if args.execute and args.action != "submit_iteration":
-        return "--execute requires --action submit_iteration in Fase 4B"
+    if args.action == "propose_next_iteration":
+        if args.from_iteration is None:
+            return "--action propose_next_iteration requires --from-iteration"
+        if args.iteration is not None:
+            return "--iteration is not used with --action propose_next_iteration; use --from-iteration"
+        if args.init_state or args.write_state:
+            return (
+                "--action propose_next_iteration supports only --dry-run or --execute"
+            )
+
+    if args.action is None:
+        if args.execute:
+            return "--execute requires --action"
+        if any(value is not None for value in propose_args):
+            return (
+                "propose-next-iteration options require --action propose_next_iteration"
+            )
 
     return None
 

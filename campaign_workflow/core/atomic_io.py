@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,11 +18,17 @@ def read_json(path: Path) -> dict[str, Any]:
     return data
 
 
-def write_json_atomic(path: Path, data: dict[str, Any], *, dry_run: bool = False) -> None:
+def write_json_atomic(
+    path: Path, data: dict[str, Any], *, dry_run: bool = False
+) -> None:
     """Write JSON atomically by writing a temp file and renaming it into place.
 
     The temporary file is created in the same directory as the target so that
     os.replace is atomic on the target filesystem.
+
+    On Windows, os.replace can occasionally raise PermissionError if the
+    destination file is transiently locked by the OS, antivirus, indexing, etc.
+    We retry a few times before surfacing the real error.
     """
     if dry_run:
         return
@@ -37,7 +44,7 @@ def write_json_atomic(path: Path, data: dict[str, Any], *, dry_run: bool = False
             f.flush()
             os.fsync(f.fileno())
 
-        os.replace(tmp_path, path)
+        _replace_with_short_retry(tmp_path, path)
 
     finally:
         if tmp_path.exists():
@@ -45,3 +52,20 @@ def write_json_atomic(path: Path, data: dict[str, Any], *, dry_run: bool = False
                 tmp_path.unlink()
             except OSError:
                 pass
+
+
+def _replace_with_short_retry(tmp_path: Path, path: Path) -> None:
+    delays = [0.0, 0.02, 0.05, 0.1, 0.2]
+    last_exc: PermissionError | None = None
+
+    for delay in delays:
+        if delay:
+            time.sleep(delay)
+        try:
+            os.replace(tmp_path, path)
+            return
+        except PermissionError as exc:
+            last_exc = exc
+
+    assert last_exc is not None
+    raise last_exc
