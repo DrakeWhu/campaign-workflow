@@ -12,6 +12,12 @@ from campaign_workflow.optimization_state import (
     write_optimization_state,
 )
 from campaign_workflow.optimizer_tick import OptimizerTickError, run_optimizer_tick
+from campaign_workflow.guards import (
+    GuardError,
+    evaluate_guards,
+    guard_report_blocks,
+    write_guard_report,
+)
 from campaign_workflow.submit_iteration import (
     SubmitIterationError,
     build_submit_iteration_plan,
@@ -57,7 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--action",
-        choices=["submit_iteration", "reconcile_iteration", "propose_next_iteration"],
+        choices=[
+            "check_guards",
+            "submit_iteration",
+            "reconcile_iteration",
+            "propose_next_iteration",
+        ],
         default=None,
         help="Explicit action to plan or execute after the finite audit.",
     )
@@ -164,38 +175,94 @@ def main(argv: list[str] | None = None) -> int:
 
             state_path = Path(summary["optimization_state_path"])
 
-            if args.action == "submit_iteration":
-                plan = build_submit_iteration_plan(
-                    tick_summary=summary,
+            if args.action == "check_guards":
+                report = evaluate_guards(
                     optimization_root=optimization_root,
-                    iteration=int(args.iteration),
+                    tick_summary=summary,
+                    action="check_guards",
+                    iteration=args.iteration,
                     array_spec=args.array_spec,
                     max_cases=args.max_cases,
-                    submit_script=args.submit_script,
-                    workflow_root=args.workflow_root,
-                    workflow_env=args.workflow_env,
-                    job_name=args.job_name,
+                    from_iteration=args.from_iteration,
+                    next_iteration=args.next_iteration,
+                    optimization_config_path=args.optimization_config,
                 )
-                summary["action"] = "submit_iteration"
-                summary["submit_plan"] = plan.to_dict()
-                summary["state_updates_if_executed"] = state_updates_preview(plan)
+                summary["action"] = "check_guards"
+                summary["guard_report"] = report
+                summary["recommended_action"] = report["recommended_action"]
 
-                if args.execute:
-                    result = execute_submit_iteration(plan)
-                    new_state = update_state_after_submit(
-                        state_doc=summary["proposed_optimization_state"],
-                        plan=plan,
-                        result=result,
-                    )
-                    write_optimization_state(optimization_root, new_state)
-                    summary["mode"] = "execute"
-                    summary["state_written"] = True
-                    summary["submission_result"] = result.to_dict()
-                    summary["optimization_state_after_submit"] = new_state
+                if args.write_state:
+                    report_path = write_guard_report(optimization_root, report)
+                    summary["mode"] = "write-state"
+                    summary["state_written"] = False
+                    summary["guard_report_written"] = str(report_path)
                 else:
                     summary["mode"] = "dry-run"
                     summary["state_written"] = False
 
+            elif args.action == "submit_iteration":
+                report = evaluate_guards(
+                    optimization_root=optimization_root,
+                    tick_summary=summary,
+                    action="submit_iteration",
+                    iteration=args.iteration,
+                    array_spec=args.array_spec,
+                    max_cases=args.max_cases,
+                    optimization_config_path=args.optimization_config,
+                )
+                summary["guard_report"] = report
+                summary["recommended_action"] = report["recommended_action"]
+
+                if guard_report_blocks(report):
+                    summary["action"] = "submit_iteration"
+                    summary["mode"] = "dry-run" if not args.execute else "execute"
+                    summary["state_written"] = False
+                    summary["submit_blocked_by_guards"] = True
+
+                    if args.execute:
+                        reasons = ", ".join(
+                            str(item.get("reason", ""))
+                            for item in report.get("guards", [])
+                            if item.get("status") == "blocked"
+                        )
+                        raise SubmitIterationError(
+                            "submit_iteration blocked by guards: "
+                            f"{report['overall_status']} / "
+                            f"{report['recommended_action']} / "
+                            f"{reasons}"
+                        )
+                else:
+                    plan = build_submit_iteration_plan(
+                        tick_summary=summary,
+                        optimization_root=optimization_root,
+                        iteration=int(args.iteration),
+                        array_spec=args.array_spec,
+                        max_cases=args.max_cases,
+                        submit_script=args.submit_script,
+                        workflow_root=args.workflow_root,
+                        workflow_env=args.workflow_env,
+                        job_name=args.job_name,
+                    )
+
+                    summary["action"] = "submit_iteration"
+                    summary["submit_plan"] = plan.to_dict()
+                    summary["state_updates_if_executed"] = state_updates_preview(plan)
+
+                    if args.execute:
+                        result = execute_submit_iteration(plan)
+                        new_state = update_state_after_submit(
+                            state_doc=summary["proposed_optimization_state"],
+                            plan=plan,
+                            result=result,
+                        )
+                        write_optimization_state(optimization_root, new_state)
+                        summary["mode"] = "execute"
+                        summary["state_written"] = True
+                        summary["submission_result"] = result.to_dict()
+                        summary["optimization_state_after_submit"] = new_state
+                    else:
+                        summary["mode"] = "dry-run"
+                        summary["state_written"] = False
             elif args.action == "reconcile_iteration":
                 state_info = read_optimization_state(optimization_root)
                 state_doc = state_info.data or summary["proposed_optimization_state"]
@@ -249,7 +316,36 @@ def main(argv: list[str] | None = None) -> int:
                     "batch_campaign_plan": str(plan.batch_campaign_plan),
                 }
 
-                if args.execute:
+                report = evaluate_guards(
+                    optimization_root=optimization_root,
+                    tick_summary=summary,
+                    action="propose_next_iteration",
+                    from_iteration=args.from_iteration,
+                    next_iteration=plan.next_iteration,
+                    optimization_config_path=args.optimization_config,
+                )
+
+                summary["guard_report"] = report
+                summary["recommended_action"] = report["recommended_action"]
+
+                if guard_report_blocks(report):
+                    summary["mode"] = "dry-run" if not args.execute else "execute"
+                    summary["state_written"] = False
+                    summary["propose_blocked_by_guards"] = True
+
+                    if args.execute:
+                        reasons = ", ".join(
+                            str(item.get("reason", ""))
+                            for item in report.get("guards", [])
+                            if item.get("status") == "blocked"
+                        )
+                        raise ProposeNextIterationError(
+                            "propose_next_iteration blocked by guards: "
+                            f"{report['overall_status']} / "
+                            f"{report['recommended_action']} / "
+                            f"{reasons}"
+                        )
+                elif args.execute:
                     optimizer_result = run_external_optimizer_command(plan)
                     optimizer_outputs = verify_optimizer_outputs(plan)
                     preparation_result = prepare_next_campaign_from_optimizer_outputs(
@@ -335,6 +431,7 @@ def main(argv: list[str] | None = None) -> int:
         SubmitIterationError,
         ReconcileIterationError,
         ProposeNextIterationError,
+        GuardError,
     ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
@@ -361,17 +458,26 @@ def _validate_args(args: argparse.Namespace) -> str | None:
         args.optimization_config,
     ]
 
-    if (
-        any(value is not None for value in submit_args)
-        and args.action != "submit_iteration"
-    ):
-        return "submit options require --action submit_iteration"
+    if any(value is not None for value in submit_args) and args.action not in {
+        "submit_iteration",
+        "check_guards",
+    }:
+        return (
+            "submit options require --action submit_iteration or --action check_guards"
+        )
 
-    if (
-        any(value is not None for value in propose_args)
-        and args.action != "propose_next_iteration"
-    ):
-        return "propose-next-iteration options require --action propose_next_iteration"
+    if any(value is not None for value in propose_args) and args.action not in {
+        "propose_next_iteration",
+        "check_guards",
+        "submit_iteration",
+    }:
+        return "propose-next-iteration options require --action propose_next_iteration or --action check_guards"
+
+    if args.action == "check_guards":
+        if args.init_state or args.execute:
+            return "--action check_guards supports only --dry-run or --write-state"
+        if args.array_spec is not None and args.max_cases is not None:
+            return "--array-spec and --max-cases are mutually exclusive"
 
     if args.action == "submit_iteration":
         if args.iteration is None:
