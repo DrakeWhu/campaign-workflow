@@ -8,6 +8,7 @@ from pathlib import Path
 from campaign_workflow.optimization_state import (
     OptimizationStateError,
     optimizer_tick_lock,
+    read_optimization_state,
     write_optimization_state,
 )
 from campaign_workflow.optimizer_tick import OptimizerTickError, run_optimizer_tick
@@ -17,6 +18,11 @@ from campaign_workflow.submit_iteration import (
     execute_submit_iteration,
     state_updates_preview,
     update_state_after_submit,
+)
+from campaign_workflow.reconcile_iteration import (
+    ReconcileIterationError,
+    reconcile_iteration,
+    update_state_after_reconcile,
 )
 
 
@@ -41,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--action",
-        choices=["submit_iteration"],
+        choices=["submit_iteration", "reconcile_iteration"],
         default=None,
         help="Explicit action to plan or execute after the finite audit.",
     )
@@ -94,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--write-state",
         action="store_true",
-        help="Write or replace optimization_state.json explicitly from the current finite audit.",
+        help="Write or replace optimization_state.json explicitly from the current finite audit/reconciliation.",
     )
     mode.add_argument(
         "--execute",
@@ -129,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             state_path = Path(summary["optimization_state_path"])
+
             if args.action == "submit_iteration":
                 plan = build_submit_iteration_plan(
                     tick_summary=summary,
@@ -161,6 +168,36 @@ def main(argv: list[str] | None = None) -> int:
                     summary["mode"] = "dry-run"
                     summary["state_written"] = False
 
+            elif args.action == "reconcile_iteration":
+                state_info = read_optimization_state(optimization_root)
+                state_doc = state_info.data or summary["proposed_optimization_state"]
+
+                reconciliation = reconcile_iteration(
+                    tick_summary=summary,
+                    state_doc=state_doc,
+                    optimization_root=optimization_root,
+                    iteration=int(args.iteration),
+                    query_slurm=True,
+                )
+
+                summary["action"] = "reconcile_iteration"
+                summary["reconciliation"] = reconciliation
+                summary["state_updates_if_written"] = reconciliation["state_update"]
+                summary["recommended_action"] = reconciliation["recommended_action"]
+
+                if args.write_state:
+                    new_state = update_state_after_reconcile(
+                        state_doc=state_doc,
+                        reconciliation=reconciliation,
+                    )
+                    write_optimization_state(optimization_root, new_state)
+                    summary["mode"] = "write-state"
+                    summary["state_written"] = True
+                    summary["optimization_state_after_reconcile"] = new_state
+                else:
+                    summary["mode"] = "dry-run"
+                    summary["state_written"] = False
+
             elif args.init_state:
                 if state_path.exists():
                     print(
@@ -174,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 summary["mode"] = "init-state"
                 summary["state_written"] = True
+
             elif args.write_state:
                 write_optimization_state(
                     optimization_root,
@@ -181,11 +219,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 summary["mode"] = "write-state"
                 summary["state_written"] = True
+
             else:
                 summary["mode"] = "dry-run"
                 summary["state_written"] = False
 
-    except (OptimizerTickError, OptimizationStateError, SubmitIterationError) as exc:
+    except (
+        OptimizerTickError,
+        OptimizationStateError,
+        SubmitIterationError,
+        ReconcileIterationError,
+    ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
@@ -205,7 +249,10 @@ def _validate_args(args: argparse.Namespace) -> str | None:
         args.workflow_env,
         args.job_name,
     ]
-    if any(value is not None for value in action_args) and args.action is None:
+    if (
+        any(value is not None for value in action_args)
+        and args.action != "submit_iteration"
+    ):
         return "submit options require --action submit_iteration"
 
     if args.action == "submit_iteration":
@@ -215,6 +262,14 @@ def _validate_args(args: argparse.Namespace) -> str | None:
             return "--action submit_iteration supports only --dry-run or --execute"
         if args.array_spec is not None and args.max_cases is not None:
             return "--array-spec and --max-cases are mutually exclusive"
+
+    if args.action == "reconcile_iteration":
+        if args.iteration is None:
+            return "--action reconcile_iteration requires --iteration"
+        if args.init_state or args.execute:
+            return (
+                "--action reconcile_iteration supports only --dry-run or --write-state"
+            )
 
     if args.execute and args.action != "submit_iteration":
         return "--execute requires --action submit_iteration in Fase 4B"

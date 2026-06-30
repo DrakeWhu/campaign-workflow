@@ -411,6 +411,16 @@ def classify_reconciliation(
             warnings,
         )
 
+    if (
+        bool(iteration_state.get("submitted"))
+        and slurm_info.get("reason") == "no_slurm_job_ids"
+        and case_audit.n_submitted_sim_done < case_audit.submitted_case_count
+    ):
+        warnings.append(
+            "iteration is marked submitted but no SLURM job id is registered and submitted case markers are incomplete"
+        )
+        return "needs_inspection", "inspect_failures", warnings
+
     if case_audit.submitted_unknown_case_ids:
         warnings.append(
             f"submitted case IDs not present in cases.tsv: {case_audit.submitted_unknown_case_ids}"

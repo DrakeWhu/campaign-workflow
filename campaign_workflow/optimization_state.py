@@ -25,6 +25,7 @@ VALID_OPTIMIZATION_STATUSES = {
     "reduced_ready",
     "closed",
     "failed",
+    "needs_inspection",
     "aborted",
     "paused",
 }
