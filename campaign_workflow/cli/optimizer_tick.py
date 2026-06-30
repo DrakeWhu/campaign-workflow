@@ -18,6 +18,13 @@ from campaign_workflow.guards import (
     guard_report_blocks,
     write_guard_report,
 )
+from campaign_workflow.stopping import (
+    StoppingError,
+    evaluate_stopping,
+    stopping_blocks,
+    update_state_after_stopping,
+    write_stopping_report,
+)
 from campaign_workflow.submit_iteration import (
     SubmitIterationError,
     build_submit_iteration_plan,
@@ -65,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--action",
         choices=[
             "check_guards",
+            "check_stopping",
             "submit_iteration",
             "reconcile_iteration",
             "propose_next_iteration",
@@ -200,6 +208,41 @@ def main(argv: list[str] | None = None) -> int:
                     summary["mode"] = "dry-run"
                     summary["state_written"] = False
 
+            elif args.action == "check_stopping":
+                state_info = read_optimization_state(optimization_root)
+                state_doc = state_info.data or summary["proposed_optimization_state"]
+
+                report = evaluate_stopping(
+                    optimization_root=optimization_root,
+                    tick_summary=summary,
+                    state_doc=state_doc,
+                    action="check_stopping",
+                    iteration=int(args.iteration),
+                    next_iteration=args.next_iteration,
+                    optimization_config_path=args.optimization_config,
+                )
+
+                summary["action"] = "check_stopping"
+                summary["stopping_report"] = report
+                summary["recommended_action"] = report["recommended_action"]
+
+                if args.write_state:
+                    report_path = write_stopping_report(optimization_root, report)
+                    new_state = update_state_after_stopping(
+                        state_doc=state_doc,
+                        report=report,
+                        report_path=report_path,
+                    )
+                    write_optimization_state(optimization_root, new_state)
+
+                    summary["mode"] = "write-state"
+                    summary["state_written"] = True
+                    summary["stopping_report_written"] = str(report_path)
+                    summary["optimization_state_after_stopping"] = new_state
+                else:
+                    summary["mode"] = "dry-run"
+                    summary["state_written"] = False
+
             elif args.action == "submit_iteration":
                 report = evaluate_guards(
                     optimization_root=optimization_root,
@@ -300,104 +343,140 @@ def main(argv: list[str] | None = None) -> int:
                         "optimization_state.json is required for propose_next_iteration"
                     )
 
-                plan = build_propose_next_iteration_plan(
+                requested_next_iteration = (
+                    args.next_iteration
+                    if args.next_iteration is not None
+                    else int(args.from_iteration) + 1
+                )
+
+                stopping_report = evaluate_stopping(
+                    optimization_root=optimization_root,
                     tick_summary=summary,
                     state_doc=state_info.data,
-                    optimization_root=optimization_root,
-                    from_iteration=int(args.from_iteration),
-                    next_iteration=args.next_iteration,
+                    action="propose_next_iteration",
+                    iteration=int(args.from_iteration),
+                    next_iteration=requested_next_iteration,
                     optimization_config_path=args.optimization_config,
                 )
 
                 summary["action"] = "propose_next_iteration"
-                summary["propose_next_iteration_plan"] = plan.to_dict()
-                summary["optimizer_outputs_if_executed"] = {
-                    "candidate_batch": str(plan.candidate_batch),
-                    "batch_campaign_plan": str(plan.batch_campaign_plan),
-                }
+                summary["stopping_report"] = stopping_report
 
-                report = evaluate_guards(
-                    optimization_root=optimization_root,
-                    tick_summary=summary,
-                    action="propose_next_iteration",
-                    from_iteration=args.from_iteration,
-                    next_iteration=plan.next_iteration,
-                    optimization_config_path=args.optimization_config,
-                )
-
-                summary["guard_report"] = report
-                summary["recommended_action"] = report["recommended_action"]
-
-                if guard_report_blocks(report):
+                if stopping_blocks(stopping_report):
                     summary["mode"] = "dry-run" if not args.execute else "execute"
                     summary["state_written"] = False
-                    summary["propose_blocked_by_guards"] = True
+                    summary["propose_blocked_by_stopping"] = True
+                    summary["recommended_action"] = stopping_report[
+                        "recommended_action"
+                    ]
 
                     if args.execute:
-                        reasons = ", ".join(
-                            str(item.get("reason", ""))
-                            for item in report.get("guards", [])
-                            if item.get("status") == "blocked"
-                        )
                         raise ProposeNextIterationError(
-                            "propose_next_iteration blocked by guards: "
-                            f"{report['overall_status']} / "
-                            f"{report['recommended_action']} / "
-                            f"{reasons}"
+                            "propose_next_iteration blocked by stopping policy: "
+                            f"{stopping_report['overall_decision']} / "
+                            f"{'; '.join(stopping_report.get('reasons', []))}"
                         )
-                elif args.execute:
-                    optimizer_result = run_external_optimizer_command(plan)
-                    optimizer_outputs = verify_optimizer_outputs(plan)
-                    preparation_result = prepare_next_campaign_from_optimizer_outputs(
-                        plan
-                    )
-
-                    materialization_result = None
-                    if plan.materialize_after_prepare:
-                        materialization_result = materialize_next_campaign(plan)
-
-                    init_states_result = None
-                    if plan.init_case_states_after_materialize:
-                        init_states_result = init_next_case_states(plan)
-
-                    next_audit = run_optimizer_tick(
-                        optimization_root=optimization_root,
-                        iteration=plan.next_iteration,
-                    )
-                    next_iterations = next_audit.get("iterations", [])
-                    if len(next_iterations) != 1:
-                        raise ProposeNextIterationError(
-                            "failed to audit prepared next iteration: "
-                            f"expected 1 iteration summary, got {len(next_iterations)}"
-                        )
-
-                    new_state = update_state_after_next_iteration(
-                        state_doc=state_info.data,
-                        plan=plan,
-                        optimizer_result=optimizer_result,
-                        optimizer_outputs=optimizer_outputs,
-                        preparation_result=preparation_result,
-                        materialization_result=materialization_result,
-                        init_states_result=init_states_result,
-                        next_iteration_summary=next_iterations[0],
-                    )
-                    write_optimization_state(optimization_root, new_state)
-
-                    summary["mode"] = "execute"
-                    summary["state_written"] = True
-                    summary["external_optimizer_result"] = optimizer_result.to_dict()
-                    summary["optimizer_outputs"] = optimizer_outputs
-                    summary["campaign_preparation_result"] = preparation_result
-                    summary["materialization_result"] = materialization_result
-                    summary["init_case_states_result"] = init_states_result
-                    summary["next_iteration_audit"] = next_iterations[0]
-                    summary["optimization_state_after_propose"] = new_state
-                    summary["recommended_action"] = "submit_iteration"
-                    summary["stopped_before_submit"] = True
                 else:
-                    summary["mode"] = "dry-run"
-                    summary["state_written"] = False
-                    summary["execution_enabled_in_this_phase"] = True
+                    plan = build_propose_next_iteration_plan(
+                        tick_summary=summary,
+                        state_doc=state_info.data,
+                        optimization_root=optimization_root,
+                        from_iteration=int(args.from_iteration),
+                        next_iteration=args.next_iteration,
+                        optimization_config_path=args.optimization_config,
+                    )
+
+                    summary["action"] = "propose_next_iteration"
+                    summary["propose_next_iteration_plan"] = plan.to_dict()
+                    summary["optimizer_outputs_if_executed"] = {
+                        "candidate_batch": str(plan.candidate_batch),
+                        "batch_campaign_plan": str(plan.batch_campaign_plan),
+                    }
+
+                    report = evaluate_guards(
+                        optimization_root=optimization_root,
+                        tick_summary=summary,
+                        action="propose_next_iteration",
+                        from_iteration=args.from_iteration,
+                        next_iteration=plan.next_iteration,
+                        optimization_config_path=args.optimization_config,
+                    )
+
+                    summary["guard_report"] = report
+                    summary["recommended_action"] = report["recommended_action"]
+
+                    if guard_report_blocks(report):
+                        summary["mode"] = "dry-run" if not args.execute else "execute"
+                        summary["state_written"] = False
+                        summary["propose_blocked_by_guards"] = True
+
+                        if args.execute:
+                            reasons = ", ".join(
+                                str(item.get("reason", ""))
+                                for item in report.get("guards", [])
+                                if item.get("status") == "blocked"
+                            )
+                            raise ProposeNextIterationError(
+                                "propose_next_iteration blocked by guards: "
+                                f"{report['overall_status']} / "
+                                f"{report['recommended_action']} / "
+                                f"{reasons}"
+                            )
+                    elif args.execute:
+                        optimizer_result = run_external_optimizer_command(plan)
+                        optimizer_outputs = verify_optimizer_outputs(plan)
+                        preparation_result = (
+                            prepare_next_campaign_from_optimizer_outputs(plan)
+                        )
+
+                        materialization_result = None
+                        if plan.materialize_after_prepare:
+                            materialization_result = materialize_next_campaign(plan)
+
+                        init_states_result = None
+                        if plan.init_case_states_after_materialize:
+                            init_states_result = init_next_case_states(plan)
+
+                        next_audit = run_optimizer_tick(
+                            optimization_root=optimization_root,
+                            iteration=plan.next_iteration,
+                        )
+                        next_iterations = next_audit.get("iterations", [])
+                        if len(next_iterations) != 1:
+                            raise ProposeNextIterationError(
+                                "failed to audit prepared next iteration: "
+                                f"expected 1 iteration summary, got {len(next_iterations)}"
+                            )
+
+                        new_state = update_state_after_next_iteration(
+                            state_doc=state_info.data,
+                            plan=plan,
+                            optimizer_result=optimizer_result,
+                            optimizer_outputs=optimizer_outputs,
+                            preparation_result=preparation_result,
+                            materialization_result=materialization_result,
+                            init_states_result=init_states_result,
+                            next_iteration_summary=next_iterations[0],
+                        )
+                        write_optimization_state(optimization_root, new_state)
+
+                        summary["mode"] = "execute"
+                        summary["state_written"] = True
+                        summary["external_optimizer_result"] = (
+                            optimizer_result.to_dict()
+                        )
+                        summary["optimizer_outputs"] = optimizer_outputs
+                        summary["campaign_preparation_result"] = preparation_result
+                        summary["materialization_result"] = materialization_result
+                        summary["init_case_states_result"] = init_states_result
+                        summary["next_iteration_audit"] = next_iterations[0]
+                        summary["optimization_state_after_propose"] = new_state
+                        summary["recommended_action"] = "submit_iteration"
+                        summary["stopped_before_submit"] = True
+                    else:
+                        summary["mode"] = "dry-run"
+                        summary["state_written"] = False
+                        summary["execution_enabled_in_this_phase"] = True
 
             elif args.init_state:
                 if state_path.exists():
@@ -432,6 +511,7 @@ def main(argv: list[str] | None = None) -> int:
         ReconcileIterationError,
         ProposeNextIterationError,
         GuardError,
+        StoppingError,
     ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
@@ -469,6 +549,7 @@ def _validate_args(args: argparse.Namespace) -> str | None:
     if any(value is not None for value in propose_args) and args.action not in {
         "propose_next_iteration",
         "check_guards",
+        "check_stopping",
         "submit_iteration",
     }:
         return "propose-next-iteration options require --action propose_next_iteration or --action check_guards"
@@ -478,6 +559,12 @@ def _validate_args(args: argparse.Namespace) -> str | None:
             return "--action check_guards supports only --dry-run or --write-state"
         if args.array_spec is not None and args.max_cases is not None:
             return "--array-spec and --max-cases are mutually exclusive"
+
+    if args.action == "check_stopping":
+        if args.iteration is None:
+            return "--action check_stopping requires --iteration"
+        if args.init_state or args.execute:
+            return "--action check_stopping supports only --dry-run or --write-state"
 
     if args.action == "submit_iteration":
         if args.iteration is None:
