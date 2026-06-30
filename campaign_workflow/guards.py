@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import math
 import shutil
 from dataclasses import dataclass
@@ -354,6 +356,88 @@ def evaluate_quota_guard(
     used = int(usage.used)
     free = int(usage.free)
     used_fraction = (used / total) if total > 0 else math.nan
+
+    quota_probe = cfg.get("quota_probe")
+    if quota_probe is not None:
+        try:
+            quota_details = _run_quota_probe(ctx.optimization_root, quota_probe)
+        except Exception as exc:
+            return _unknown_or_blocked(
+                "quota_guard",
+                mode,
+                "quota_probe_failed",
+                {"error": str(exc), **details},
+            )
+
+        details.update(quota_details)
+
+        quota_limit = details.get("quota_limit_bytes")
+        quota_used = details.get("quota_used_bytes")
+
+        if quota_limit is None or int(quota_limit) <= 0:
+            return _unknown_or_blocked(
+                "quota_guard",
+                mode,
+                "quota_limit_unavailable",
+                details,
+            )
+
+        quota_limit_i = int(quota_limit)
+        quota_used_i = int(quota_used or 0)
+        quota_free_i = max(quota_limit_i - quota_used_i, 0)
+        quota_used_fraction = quota_used_i / quota_limit_i
+
+        details["quota_free_bytes"] = quota_free_i
+        details["quota_used_fraction"] = quota_used_fraction
+
+        hard = cfg.get("hard_used_fraction")
+        if hard is not None and quota_used_fraction >= float(hard):
+            details["threshold"] = float(hard)
+            return _guard(
+                "quota_guard",
+                "blocked" if mode == "hard" else "warn",
+                "quota_used_fraction_exceeds_hard_threshold",
+                details,
+            )
+
+        soft = cfg.get("soft_used_fraction")
+        if soft is not None and quota_used_fraction >= float(soft):
+            details["threshold"] = float(soft)
+            return _guard(
+                "quota_guard",
+                "warn",
+                "quota_used_fraction_exceeds_soft_threshold",
+                details,
+            )
+
+        min_free = cfg.get("min_free_bytes")
+        if min_free is not None:
+            min_free_i = int(min_free)
+            details["min_free_bytes"] = min_free_i
+
+            if quota_free_i < min_free_i:
+                deficit = min_free_i - quota_free_i
+                details["quota_free_bytes_deficit"] = deficit
+
+                if int(details.get("safe_cleanup_candidate_bytes", 0)) >= deficit:
+                    reason = (
+                        "insufficient_quota_free_space_but_cleanup_candidates_exist"
+                    )
+                    recommended = "cleanup_then_retry"
+                else:
+                    reason = "insufficient_quota_free_space"
+                    recommended = "pause_or_cleanup"
+
+                guard = _guard(
+                    "quota_guard",
+                    "blocked" if mode == "hard" else "warn",
+                    reason,
+                    details,
+                )
+                guard["recommended_action"] = recommended
+                return guard
+
+        return _guard("quota_guard", "pass", "quota_within_policy", details)
 
     details.update(
         {
@@ -824,3 +908,138 @@ def _float_from_row(row: dict[str, str], *names: str) -> float | None:
             continue
 
     return None
+
+
+def _run_quota_probe(
+    optimization_root: Path,
+    probe: Any,
+) -> dict[str, Any]:
+    if not isinstance(probe, dict):
+        raise GuardError("quota_probe must be an object")
+
+    kind = str(probe.get("kind", "")).strip()
+
+    if kind == "lfs_quota_user":
+        return _run_lfs_quota_user_probe(optimization_root, probe)
+
+    raise GuardError(f"unsupported quota_probe kind: {kind}")
+
+
+def _run_lfs_quota_user_probe(
+    optimization_root: Path,
+    probe: dict[str, Any],
+) -> dict[str, Any]:
+    path_raw = str(probe.get("path", "/HOME"))
+    path = _render_root_path(optimization_root, path_raw)
+    parse_filesystem = path_raw.replace("{optimization_root}", str(optimization_root))
+
+    user_raw = str(probe.get("user", "{USER}"))
+    user = user_raw.replace("{USER}", os.environ.get("USER", ""))
+
+    if not user:
+        raise GuardError("lfs_quota_user probe could not resolve user")
+
+    command = ["lfs", "quota", "-h", "-u", user, str(path)]
+
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise GuardError(
+            "lfs quota command failed: "
+            f"return_code={result.returncode}, stderr={result.stderr.strip()}"
+        )
+
+    parsed = _parse_lfs_quota_output(result.stdout, parse_filesystem)
+
+    return {
+        "quota_probe_kind": "lfs_quota_user",
+        "quota_command": command,
+        "quota_probe_path": str(path),
+        "quota_user": user,
+        "quota_used_bytes": parsed["used_bytes"],
+        "quota_soft_bytes": parsed["soft_bytes"],
+        "quota_limit_bytes": parsed["limit_bytes"],
+        "quota_files_used": parsed.get("files_used"),
+        "quota_raw_stdout": result.stdout,
+    }
+
+
+def _normalize_quota_filesystem(value: str) -> str:
+    text = str(value).strip().replace("\\", "/")
+    while "//" in text:
+        text = text.replace("//", "/")
+    return text.rstrip("/") or "/"
+
+
+def _parse_lfs_quota_output(stdout: str, filesystem: str) -> dict[str, Any]:
+    for line in stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+
+        # Expected Lustre row:
+        # /HOME  422.3G  0k  1T  -  171177  0  0  -
+        if _normalize_quota_filesystem(parts[0]) != _normalize_quota_filesystem(
+            filesystem
+        ):
+            continue
+
+        used = _parse_human_bytes(parts[1])
+        soft = _parse_human_bytes(parts[2])
+        hard = _parse_human_bytes(parts[3])
+
+        limit = hard if hard > 0 else soft
+
+        files_used = None
+        if len(parts) >= 6:
+            try:
+                files_used = int(parts[5])
+            except ValueError:
+                files_used = None
+
+        return {
+            "used_bytes": used,
+            "soft_bytes": soft,
+            "limit_bytes": limit,
+            "files_used": files_used,
+        }
+
+    raise GuardError(f"could not parse lfs quota output for filesystem {filesystem!r}")
+
+
+def _parse_human_bytes(text: str) -> int:
+    raw = str(text).strip()
+    if not raw:
+        raise GuardError("empty byte quantity")
+
+    if raw[-1].isalpha():
+        number = raw[:-1]
+        suffix = raw[-1].lower()
+    else:
+        number = raw
+        suffix = ""
+
+    try:
+        value = float(number)
+    except ValueError as exc:
+        raise GuardError(f"invalid byte quantity: {text!r}") from exc
+
+    factors = {
+        "": 1,
+        "b": 1,
+        "k": 1024,
+        "m": 1024**2,
+        "g": 1024**3,
+        "t": 1024**4,
+        "p": 1024**5,
+    }
+
+    if suffix not in factors:
+        raise GuardError(f"unsupported byte suffix in quantity: {text!r}")
+
+    return int(value * factors[suffix])

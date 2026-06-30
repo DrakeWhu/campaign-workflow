@@ -454,6 +454,112 @@ class OptimizerTickPhase5BGuardsTests(unittest.TestCase):
 
         return rc, stdout.getvalue(), stderr.getvalue()
 
+    def test_quota_guard_uses_lfs_user_quota_probe(self) -> None:
+        self._update_guards(
+            {
+                "quota": {
+                    "enabled": True,
+                    "mode": "hard",
+                    "soft_used_fraction": 0.80,
+                    "hard_used_fraction": 0.90,
+                    "quota_probe": {
+                        "kind": "lfs_quota_user",
+                        "path": "/HOME",
+                        "user": "{USER}",
+                    },
+                }
+            }
+        )
+
+        stdout_lfs = (
+            "Disk quotas for usr jrodriguez (uid 1156):\n"
+            "     Filesystem    used   quota   limit   grace   files   quota   limit   grace\n"
+            "          /HOME  422.3G      0k      1T       -  171177       0       0       -\n"
+        )
+
+        completed = CompletedProcessStub(returncode=0, stdout=stdout_lfs, stderr="")
+        usage = type("Usage", (), {"total": 1000, "used": 100, "free": 900})()
+
+        with (
+            patch(
+                "campaign_workflow.guards.subprocess.run", return_value=completed
+            ) as run_mock,
+            patch("campaign_workflow.guards.shutil.disk_usage", return_value=usage),
+            patch.dict("os.environ", {"USER": "jrodriguez"}),
+        ):
+            rc, stdout, stderr = self._run_cli(
+                "--action",
+                "check_guards",
+                "--iteration",
+                "0",
+                "--array-spec",
+                "0-9",
+                "--dry-run",
+            )
+
+        self.assertEqual(rc, 0, stderr)
+        run_mock.assert_called_once()
+
+        data = json.loads(stdout)
+        quota = self._guard(data, "quota_guard")
+        self.assertEqual(quota["status"], "pass")
+        self.assertEqual(quota["reason"], "quota_within_policy")
+        self.assertEqual(quota["details"]["quota_probe_kind"], "lfs_quota_user")
+        self.assertGreater(quota["details"]["quota_limit_bytes"], 10**12)
+        self.assertLess(quota["details"]["quota_used_fraction"], 0.5)
+
+    def test_quota_guard_blocks_when_lfs_user_quota_exceeds_hard_threshold(
+        self,
+    ) -> None:
+        self._update_guards(
+            {
+                "quota": {
+                    "enabled": True,
+                    "mode": "hard",
+                    "soft_used_fraction": 0.80,
+                    "hard_used_fraction": 0.90,
+                    "quota_probe": {
+                        "kind": "lfs_quota_user",
+                        "path": "/HOME",
+                        "user": "{USER}",
+                    },
+                }
+            }
+        )
+
+        stdout_lfs = (
+            "Disk quotas for usr jrodriguez (uid 1156):\n"
+            "     Filesystem    used   quota   limit   grace   files   quota   limit   grace\n"
+            "          /HOME  950G      0k      1T       -  171177       0       0       -\n"
+        )
+
+        completed = CompletedProcessStub(returncode=0, stdout=stdout_lfs, stderr="")
+        usage = type("Usage", (), {"total": 1000, "used": 100, "free": 900})()
+
+        with (
+            patch("campaign_workflow.guards.subprocess.run", return_value=completed),
+            patch("campaign_workflow.guards.shutil.disk_usage", return_value=usage),
+            patch.dict("os.environ", {"USER": "jrodriguez"}),
+        ):
+            rc, stdout, stderr = self._run_cli(
+                "--action",
+                "check_guards",
+                "--iteration",
+                "0",
+                "--array-spec",
+                "0-9",
+                "--dry-run",
+            )
+
+        self.assertEqual(rc, 0, stderr)
+        data = json.loads(stdout)
+        quota = self._guard(data, "quota_guard")
+        self.assertEqual(quota["status"], "blocked")
+        self.assertEqual(
+            quota["reason"],
+            "quota_used_fraction_exceeds_hard_threshold",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
