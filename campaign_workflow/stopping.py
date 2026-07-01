@@ -85,6 +85,7 @@ def evaluate_stopping(
     iteration: int,
     next_iteration: int | None = None,
     optimization_config_path: Path | None = None,
+    signals_iteration: int | None = None,
 ) -> dict[str, Any]:
     optimization_root = optimization_root.resolve()
     config_path, stopping_config, legacy_policy = load_stopping_config(
@@ -114,8 +115,20 @@ def evaluate_stopping(
 
     iteration_state = _find_iteration_state(state_doc, iteration)
     iteration_summary = _find_iteration_summary(tick_summary, iteration)
-    signals_path = _stopping_signals_path(optimization_root, iteration)
+    signals_iter = (
+        int(signals_iteration) if signals_iteration is not None else int(iteration)
+    )
+    signals_path = _stopping_signals_path(optimization_root, signals_iter)
     signals_doc = _read_optional_json(signals_path)
+    signals_context = _signals_context(
+        signals_doc,
+        expected_history_iteration=int(iteration),
+        signals_iteration=signals_iter,
+        signals_path=signals_path,
+    )
+    policy_signals_doc = (
+        signals_doc if bool(signals_context.get("usable_for_iteration")) else None
+    )
 
     base_details = {
         "enabled": enabled,
@@ -124,6 +137,7 @@ def evaluate_stopping(
         "iteration_summary": _small_iteration_summary(iteration_summary),
         "signals_path": str(signals_path),
         "signals_exists": signals_doc is not None,
+        "signals_context": signals_context,
     }
 
     if _is_paused(ctx, merged_policy):
@@ -213,7 +227,7 @@ def evaluate_stopping(
         iteration_state=iteration_state or {},
         iteration_summary=iteration_summary or {},
         policy=merged_policy,
-        signals=signals_doc,
+        signals=policy_signals_doc,
     )
     if quality is not None:
         return _policy_report(
@@ -231,11 +245,11 @@ def evaluate_stopping(
 
     no_improvement = _no_improvement_decision(
         policy=merged_policy,
-        signals=signals_doc,
+        signals=policy_signals_doc,
     )
     novelty = _candidate_novelty_decision(
         policy=merged_policy,
-        signals=signals_doc,
+        signals=policy_signals_doc,
     )
 
     if no_improvement is not None and novelty is not None:
@@ -275,7 +289,7 @@ def evaluate_stopping(
             recommended_action="no_action",
         )
 
-    boundary = _boundary_decision(policy=merged_policy, signals=signals_doc)
+    boundary = _boundary_decision(policy=merged_policy, signals=policy_signals_doc)
     if boundary is not None:
         block = bool(boundary.get("block", False))
         return _policy_report(
@@ -291,7 +305,7 @@ def evaluate_stopping(
             recommended_action="propose_next_iteration" if not block else "no_action",
         )
 
-    surrogate = _surrogate_decision(policy=merged_policy, signals=signals_doc)
+    surrogate = _surrogate_decision(policy=merged_policy, signals=policy_signals_doc)
     if surrogate is not None:
         block = bool(surrogate.get("block", False))
         return _policy_report(
@@ -307,7 +321,7 @@ def evaluate_stopping(
             recommended_action="propose_next_iteration" if not block else "no_action",
         )
 
-    optimizer_view = _optimizer_view_decision(signals_doc)
+    optimizer_view = _optimizer_view_decision(policy_signals_doc)
     if optimizer_view is not None:
         decision = str(optimizer_view["decision"])
         hard_block = decision.startswith("stop_")
@@ -930,6 +944,64 @@ def _read_optional_json(path: Path) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         raise StoppingError(f"expected JSON object: {path}")
     return data
+
+
+def _signals_context(
+    signals_doc: dict[str, Any] | None,
+    *,
+    expected_history_iteration: int,
+    signals_iteration: int,
+    signals_path: Path,
+) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "signals_path": str(signals_path),
+        "signals_iteration": int(signals_iteration),
+        "expected_history_iteration": int(expected_history_iteration),
+        "signals_exists": signals_doc is not None,
+        "usable_for_iteration": False,
+        "reason": "missing_signals",
+    }
+    if signals_doc is None:
+        return context
+
+    raw_signal_iteration = signals_doc.get("iteration")
+    context["signal_iteration"] = raw_signal_iteration
+
+    signal_root = _signals(signals_doc)
+    raw_target_history = signal_root.get("target_history_iteration")
+    context["target_history_iteration"] = raw_target_history
+
+    if raw_target_history is not None:
+        try:
+            target_history = int(raw_target_history)
+        except Exception:
+            context["reason"] = "invalid_target_history_iteration"
+            return context
+
+        if target_history != int(expected_history_iteration):
+            context["reason"] = "stale_target_history_iteration"
+            return context
+
+        context["usable_for_iteration"] = True
+        context["reason"] = "target_history_iteration_matches"
+        return context
+
+    # Backward-compatible fallback for older stopping_signals.json files that did
+    # not record target_history_iteration. These are only considered usable when
+    # the signal file belongs to the same iteration being evaluated.
+    try:
+        signal_iteration = int(raw_signal_iteration)
+    except Exception:
+        context["reason"] = "missing_target_history_iteration"
+        return context
+
+    if signal_iteration != int(expected_history_iteration):
+        context["reason"] = "signal_iteration_mismatch_without_target_history"
+        return context
+
+    context["usable_for_iteration"] = True
+    context["reason"] = "legacy_signal_iteration_matches"
+    return context
 
 
 def _signals(signals_doc: dict[str, Any]) -> dict[str, Any]:

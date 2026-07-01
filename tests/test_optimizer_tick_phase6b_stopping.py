@@ -156,6 +156,30 @@ class OptimizerTickPhase6BStoppingTests(unittest.TestCase):
             "stop_no_new_valid_observations",
         )
 
+    def test_stale_stopping_signals_are_reported_but_not_used_to_block(self) -> None:
+        self._write_stopping_signals(
+            n_new_valid=0,
+            target_history_iteration=999,
+        )
+
+        rc, stdout, stderr = self._run_cli(
+            "--action",
+            "check_stopping",
+            "--iteration",
+            "0",
+            "--dry-run",
+        )
+
+        self.assertEqual(rc, 0, stderr)
+        report = json.loads(stdout)["stopping_report"]
+        self.assertEqual(report["overall_decision"], "continue")
+        self.assertTrue(report["can_propose_next_iteration"])
+        self.assertEqual(
+            report["details"]["signals_context"]["reason"],
+            "stale_target_history_iteration",
+        )
+        self.assertFalse(report["details"]["signals_context"]["usable_for_iteration"])
+
     def test_no_improvement_returns_stop_converged(self) -> None:
         self._write_stopping_signals(
             n_new_valid=10,
@@ -220,10 +244,21 @@ class OptimizerTickPhase6BStoppingTests(unittest.TestCase):
                 "--execute",
             )
 
-        self.assertEqual(rc, 1)
-        self.assertEqual(stdout, "")
-        self.assertIn("blocked by stopping policy", stderr)
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(stderr, "")
         optimizer_mock.assert_not_called()
+
+        data = json.loads(stdout)
+        self.assertTrue(data["propose_blocked_by_stopping"])
+        self.assertTrue(data["stopped_before_optimizer"])
+        self.assertTrue(data["state_written"])
+        self.assertIn("stopping_report_written", data)
+        self.assertFalse((self.root / "iterations" / "iter_001").exists())
+
+        state = json.loads(
+            (self.root / "optimization_state.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(state["latest_stopping_decision"], "stop_converged")
 
     def test_imports_do_not_pull_optimizer_or_heavy_dependencies(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -410,6 +445,7 @@ class OptimizerTickPhase6BStoppingTests(unittest.TestCase):
         improvements: dict[str, float] | None = None,
         median_dist: float = 0.1,
         boundary_fraction: float = 0.1,
+        target_history_iteration: int | None = None,
     ) -> None:
         if improvements is None:
             improvements = {
@@ -417,40 +453,43 @@ class OptimizerTickPhase6BStoppingTests(unittest.TestCase):
                 "score_beamlike_v1": 0.0,
                 "score_transverse_v1": 0.0,
             }
+        signals = {
+            "n_fit_eligible_total": 100,
+            "n_new_valid_observations": n_new_valid,
+            "best_scores": {
+                "score_guiding_v1": 1.0,
+                "score_beamlike_v1": 2.0,
+                "score_transverse_v1": 3.0,
+            },
+            "best_score_improvement": improvements,
+            "best_score_improvement_window": {
+                "window": 3,
+                "status": "ok",
+                "values": improvements,
+            },
+            "candidate_novelty": {
+                "status": "ok",
+                "median_nearest_known_scaled_dist": median_dist,
+                "min_nearest_known_scaled_dist": median_dist / 2.0,
+            },
+            "boundary_saturation": {
+                "status": "ok",
+                "fraction_candidates_near_boundary": boundary_fraction,
+                "parameters": {"diameter_um_num": boundary_fraction},
+            },
+            "surrogate_reliability": {
+                "status": "unknown",
+                "reason": "test fixture",
+            },
+        }
+        if target_history_iteration is not None:
+            signals["target_history_iteration"] = target_history_iteration
 
         report = {
             "schema_version": 1,
             "iteration": 0,
             "objective_config_id": "capillary_objectives_v1",
-            "signals": {
-                "n_fit_eligible_total": 100,
-                "n_new_valid_observations": n_new_valid,
-                "best_scores": {
-                    "score_guiding_v1": 1.0,
-                    "score_beamlike_v1": 2.0,
-                    "score_transverse_v1": 3.0,
-                },
-                "best_score_improvement": improvements,
-                "best_score_improvement_window": {
-                    "window": 3,
-                    "status": "ok",
-                    "values": improvements,
-                },
-                "candidate_novelty": {
-                    "status": "ok",
-                    "median_nearest_known_scaled_dist": median_dist,
-                    "min_nearest_known_scaled_dist": median_dist / 2.0,
-                },
-                "boundary_saturation": {
-                    "status": "ok",
-                    "fraction_candidates_near_boundary": boundary_fraction,
-                    "parameters": {"diameter_um_num": boundary_fraction},
-                },
-                "surrogate_reliability": {
-                    "status": "unknown",
-                    "reason": "test fixture",
-                },
-            },
+            "signals": signals,
             "recommendation": {
                 "optimizer_view": "continue",
                 "reasons": [],

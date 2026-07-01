@@ -366,16 +366,26 @@ def main(argv: list[str] | None = None) -> int:
                     summary["mode"] = "dry-run" if not args.execute else "execute"
                     summary["state_written"] = False
                     summary["propose_blocked_by_stopping"] = True
+                    summary["stopped_before_optimizer"] = True
                     summary["recommended_action"] = stopping_report[
                         "recommended_action"
                     ]
 
                     if args.execute:
-                        raise ProposeNextIterationError(
-                            "propose_next_iteration blocked by stopping policy: "
-                            f"{stopping_report['overall_decision']} / "
-                            f"{'; '.join(stopping_report.get('reasons', []))}"
+                        report_path = write_stopping_report(
+                            optimization_root,
+                            stopping_report,
                         )
+                        new_state = update_state_after_stopping(
+                            state_doc=state_info.data,
+                            report=stopping_report,
+                            report_path=report_path,
+                        )
+                        write_optimization_state(optimization_root, new_state)
+
+                        summary["state_written"] = True
+                        summary["stopping_report_written"] = str(report_path)
+                        summary["optimization_state_after_stopping"] = new_state
                 else:
                     plan = build_propose_next_iteration_plan(
                         tick_summary=summary,
@@ -425,54 +435,91 @@ def main(argv: list[str] | None = None) -> int:
                     elif args.execute:
                         optimizer_result = run_external_optimizer_command(plan)
                         optimizer_outputs = verify_optimizer_outputs(plan)
-                        preparation_result = (
-                            prepare_next_campaign_from_optimizer_outputs(plan)
-                        )
 
-                        materialization_result = None
-                        if plan.materialize_after_prepare:
-                            materialization_result = materialize_next_campaign(plan)
-
-                        init_states_result = None
-                        if plan.init_case_states_after_materialize:
-                            init_states_result = init_next_case_states(plan)
-
-                        next_audit = run_optimizer_tick(
+                        post_optimizer_stopping_report = evaluate_stopping(
                             optimization_root=optimization_root,
-                            iteration=plan.next_iteration,
-                        )
-                        next_iterations = next_audit.get("iterations", [])
-                        if len(next_iterations) != 1:
-                            raise ProposeNextIterationError(
-                                "failed to audit prepared next iteration: "
-                                f"expected 1 iteration summary, got {len(next_iterations)}"
-                            )
-
-                        new_state = update_state_after_next_iteration(
+                            tick_summary=summary,
                             state_doc=state_info.data,
-                            plan=plan,
-                            optimizer_result=optimizer_result,
-                            optimizer_outputs=optimizer_outputs,
-                            preparation_result=preparation_result,
-                            materialization_result=materialization_result,
-                            init_states_result=init_states_result,
-                            next_iteration_summary=next_iterations[0],
+                            action="propose_next_iteration",
+                            iteration=int(args.from_iteration),
+                            next_iteration=plan.next_iteration,
+                            optimization_config_path=args.optimization_config,
+                            signals_iteration=plan.next_iteration,
                         )
-                        write_optimization_state(optimization_root, new_state)
 
                         summary["mode"] = "execute"
-                        summary["state_written"] = True
                         summary["external_optimizer_result"] = (
                             optimizer_result.to_dict()
                         )
                         summary["optimizer_outputs"] = optimizer_outputs
-                        summary["campaign_preparation_result"] = preparation_result
-                        summary["materialization_result"] = materialization_result
-                        summary["init_case_states_result"] = init_states_result
-                        summary["next_iteration_audit"] = next_iterations[0]
-                        summary["optimization_state_after_propose"] = new_state
-                        summary["recommended_action"] = "submit_iteration"
-                        summary["stopped_before_submit"] = True
+                        summary["post_optimizer_stopping_report"] = (
+                            post_optimizer_stopping_report
+                        )
+
+                        if stopping_blocks(post_optimizer_stopping_report):
+                            report_path = write_stopping_report(
+                                optimization_root,
+                                post_optimizer_stopping_report,
+                            )
+                            new_state = update_state_after_stopping(
+                                state_doc=state_info.data,
+                                report=post_optimizer_stopping_report,
+                                report_path=report_path,
+                            )
+                            write_optimization_state(optimization_root, new_state)
+
+                            summary["state_written"] = True
+                            summary["propose_blocked_by_stopping"] = True
+                            summary["stopped_after_optimizer"] = True
+                            summary["recommended_action"] = (
+                                post_optimizer_stopping_report["recommended_action"]
+                            )
+                            summary["stopping_report_written"] = str(report_path)
+                            summary["optimization_state_after_stopping"] = new_state
+                        else:
+                            preparation_result = (
+                                prepare_next_campaign_from_optimizer_outputs(plan)
+                            )
+
+                            materialization_result = None
+                            if plan.materialize_after_prepare:
+                                materialization_result = materialize_next_campaign(plan)
+
+                            init_states_result = None
+                            if plan.init_case_states_after_materialize:
+                                init_states_result = init_next_case_states(plan)
+
+                            next_audit = run_optimizer_tick(
+                                optimization_root=optimization_root,
+                                iteration=plan.next_iteration,
+                            )
+                            next_iterations = next_audit.get("iterations", [])
+                            if len(next_iterations) != 1:
+                                raise ProposeNextIterationError(
+                                    "failed to audit prepared next iteration: "
+                                    f"expected 1 iteration summary, got {len(next_iterations)}"
+                                )
+
+                            new_state = update_state_after_next_iteration(
+                                state_doc=state_info.data,
+                                plan=plan,
+                                optimizer_result=optimizer_result,
+                                optimizer_outputs=optimizer_outputs,
+                                preparation_result=preparation_result,
+                                materialization_result=materialization_result,
+                                init_states_result=init_states_result,
+                                next_iteration_summary=next_iterations[0],
+                            )
+                            write_optimization_state(optimization_root, new_state)
+
+                            summary["state_written"] = True
+                            summary["campaign_preparation_result"] = preparation_result
+                            summary["materialization_result"] = materialization_result
+                            summary["init_case_states_result"] = init_states_result
+                            summary["next_iteration_audit"] = next_iterations[0]
+                            summary["optimization_state_after_propose"] = new_state
+                            summary["recommended_action"] = "submit_iteration"
+                            summary["stopped_before_submit"] = True
                     else:
                         summary["mode"] = "dry-run"
                         summary["state_written"] = False
