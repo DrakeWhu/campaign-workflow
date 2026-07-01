@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from html import parser
 import json
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from campaign_workflow.optimization_state import (
     write_optimization_state,
 )
 from campaign_workflow.optimizer_tick import OptimizerTickError, run_optimizer_tick
+from campaign_workflow.optimizer_loop import OptimizerLoopError, run_optimizer_loop_once
 from campaign_workflow.guards import (
     GuardError,
     evaluate_guards,
@@ -76,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
             "submit_iteration",
             "reconcile_iteration",
             "propose_next_iteration",
+            "run_loop_once",
         ],
         default=None,
         help="Explicit action to plan or execute after the finite audit.",
@@ -113,6 +116,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--job-name",
         default=None,
         help="Optional SLURM job name. Defaults to cw_iter_XXX_cycle.",
+    )
+    parser.add_argument(
+        "--job-name-prefix",
+        default=None,
+        help=(
+            "Optional prefix for recursive loop jobs. "
+            "For run_loop_once, array jobs become <prefix>_iterXXX_cycle "
+            "and dependent optimizer ticks become <prefix>_tickXXX."
+        ),
     )
     parser.add_argument(
         "--from-iteration",
@@ -525,6 +537,26 @@ def main(argv: list[str] | None = None) -> int:
                         summary["state_written"] = False
                         summary["execution_enabled_in_this_phase"] = True
 
+            elif args.action == "run_loop_once":
+                requested_next_iteration = (
+                    args.next_iteration
+                    if args.next_iteration is not None
+                    else int(args.iteration) + 1
+                )
+                summary = run_optimizer_loop_once(
+                    optimization_root=optimization_root,
+                    iteration=int(args.iteration),
+                    next_iteration=requested_next_iteration,
+                    array_spec=args.array_spec,
+                    max_cases=args.max_cases,
+                    submit_script=args.submit_script,
+                    workflow_root=args.workflow_root,
+                    workflow_env=args.workflow_env,
+                    job_name_prefix=args.job_name_prefix,
+                    optimization_config_path=args.optimization_config,
+                    execute=bool(args.execute),
+                )
+
             elif args.init_state:
                 if state_path.exists():
                     print(
@@ -555,6 +587,7 @@ def main(argv: list[str] | None = None) -> int:
         OptimizerTickError,
         OptimizationStateError,
         SubmitIterationError,
+        OptimizerLoopError,
         ReconcileIterationError,
         ProposeNextIterationError,
         GuardError,
@@ -578,6 +611,7 @@ def _validate_args(args: argparse.Namespace) -> str | None:
         args.workflow_root,
         args.workflow_env,
         args.job_name,
+        args.job_name_prefix,
     ]
     propose_args = [
         args.from_iteration,
@@ -587,19 +621,25 @@ def _validate_args(args: argparse.Namespace) -> str | None:
 
     if any(value is not None for value in submit_args) and args.action not in {
         "submit_iteration",
+        "run_loop_once",
         "check_guards",
     }:
         return (
-            "submit options require --action submit_iteration or --action check_guards"
+            "submit options require --action submit_iteration, "
+            "--action run_loop_once, or --action check_guards"
         )
 
     if any(value is not None for value in propose_args) and args.action not in {
         "propose_next_iteration",
+        "run_loop_once",
         "check_guards",
         "check_stopping",
         "submit_iteration",
     }:
-        return "propose-next-iteration options require --action propose_next_iteration or --action check_guards"
+        return (
+            "propose-next-iteration options require --action propose_next_iteration, "
+            "--action run_loop_once, or --action check_guards"
+        )
 
     if args.action == "check_guards":
         if args.init_state or args.execute:
@@ -638,6 +678,18 @@ def _validate_args(args: argparse.Namespace) -> str | None:
             return (
                 "--action propose_next_iteration supports only --dry-run or --execute"
             )
+
+    if args.action == "run_loop_once":
+        if args.iteration is None:
+            return "--action run_loop_once requires --iteration"
+        if args.from_iteration is not None:
+            return "--from-iteration is not used with --action run_loop_once; use --iteration"
+        if args.init_state or args.write_state:
+            return "--action run_loop_once supports only --dry-run or --execute"
+        if args.array_spec is not None and args.max_cases is not None:
+            return "--array-spec and --max-cases are mutually exclusive"
+        if args.job_name is not None:
+            return "--job-name is not used with --action run_loop_once; use --job-name-prefix"
 
     if args.action is None:
         if args.execute:
