@@ -8,6 +8,9 @@ from typing import Any, Sequence
 
 from campaign_workflow.core.state import now_utc
 from campaign_workflow.core.tsv_cases import load_campaign_config, load_cases
+from campaign_workflow.slurm_submit_guard import (
+    assert_not_inside_slurm_job_for_sbatch,
+)
 
 _ARRAY_SPEC_RE = re.compile(
     r"^(?P<body>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)(?:%(?P<limit>\d+))?$"
@@ -221,6 +224,11 @@ def build_submit_iteration_plan(
 
 
 def execute_submit_iteration(plan: SubmitIterationPlan) -> SubmitIterationResult:
+    try:
+        assert_not_inside_slurm_job_for_sbatch()
+    except RuntimeError as exc:
+        raise SubmitIterationError(str(exc)) from exc
+
     completed = subprocess.run(
         plan.submit_command,
         cwd=str(plan.working_directory),
