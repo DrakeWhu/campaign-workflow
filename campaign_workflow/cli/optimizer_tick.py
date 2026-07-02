@@ -13,7 +13,11 @@ from campaign_workflow.optimization_state import (
     write_optimization_state,
 )
 from campaign_workflow.optimizer_tick import OptimizerTickError, run_optimizer_tick
-from campaign_workflow.optimizer_loop import OptimizerLoopError, run_optimizer_loop_once
+from campaign_workflow.optimizer_loop import (
+    NORMAL_CHAIN_STOP_EXIT_CODE,
+    OptimizerLoopError,
+    run_optimizer_loop_once,
+)
 from campaign_workflow.guards import (
     GuardError,
     evaluate_guards,
@@ -124,6 +128,15 @@ def build_parser() -> argparse.ArgumentParser:
             "Optional prefix for recursive loop jobs. "
             "For run_loop_once, array jobs become <prefix>_iterXXX_cycle "
             "and dependent optimizer ticks become <prefix>_tickXXX."
+        ),
+    )
+    parser.add_argument(
+        "--stop-after-materialization",
+        action="store_true",
+        help=(
+            "For --action run_loop_once, execute reconciliation, stopping, optimizer, "
+            "campaign preparation/materialization and state updates, but do not call sbatch. "
+            "This is the SUNRISE-compatible tick mode for finite pre-submitted chains."
         ),
     )
     parser.add_argument(
@@ -554,9 +567,9 @@ def main(argv: list[str] | None = None) -> int:
                     workflow_env=args.workflow_env,
                     job_name_prefix=args.job_name_prefix,
                     optimization_config_path=args.optimization_config,
+                    stop_after_materialization=bool(args.stop_after_materialization),
                     execute=bool(args.execute),
                 )
-
             elif args.init_state:
                 if state_path.exists():
                     print(
@@ -600,6 +613,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(json.dumps(summary, indent=2, sort_keys=True))
+    if (
+        args.action == "run_loop_once"
+        and bool(args.execute)
+        and bool(args.stop_after_materialization)
+        and bool(summary.get("normal_chain_stop"))
+    ):
+        return NORMAL_CHAIN_STOP_EXIT_CODE
     return 0
 
 
@@ -678,6 +698,9 @@ def _validate_args(args: argparse.Namespace) -> str | None:
             return (
                 "--action propose_next_iteration supports only --dry-run or --execute"
             )
+
+    if args.stop_after_materialization and args.action != "run_loop_once":
+        return "--stop-after-materialization requires --action run_loop_once"
 
     if args.action == "run_loop_once":
         if args.iteration is None:

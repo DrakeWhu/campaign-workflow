@@ -15,6 +15,7 @@ from campaign_workflow.guards import (
 )
 from campaign_workflow.optimization_state import (
     read_optimization_state,
+    stop_file_path,
     write_optimization_state,
 )
 from campaign_workflow.optimizer_tick import run_optimizer_tick
@@ -45,6 +46,12 @@ from campaign_workflow.submit_iteration import (
     state_updates_preview,
     update_state_after_submit,
 )
+from campaign_workflow.slurm_submit_guard import (
+    assert_not_inside_slurm_job_for_sbatch,
+)
+
+
+NORMAL_CHAIN_STOP_EXIT_CODE = 20
 
 
 class OptimizerLoopError(RuntimeError):
@@ -116,6 +123,7 @@ def run_optimizer_loop_once(
     workflow_env: Path | None = None,
     job_name_prefix: str | None = None,
     optimization_config_path: Path | None = None,
+    stop_after_materialization: bool = False,
     execute: bool,
 ) -> dict[str, Any]:
     """Run one non-resident recursive BO/MOBO loop step.
@@ -145,7 +153,11 @@ def run_optimizer_loop_once(
         "next_iteration": target_next_iteration,
         "state_written": False,
         "destructive_operations": 0,
-        "max_sbatch_calls_if_executed": 2,
+        "submit_mode": (
+            "materialize_only" if stop_after_materialization else "submit_and_recurse"
+        ),
+        "stop_after_materialization": bool(stop_after_materialization),
+        "max_sbatch_calls_if_executed": 0 if stop_after_materialization else 2,
         "will_not": [
             "modify physics inputs",
             "modify input_template.py physics content",
@@ -235,6 +247,17 @@ def run_optimizer_loop_once(
                 report=stopping_report,
                 report_path=report_path,
             )
+            if stop_after_materialization:
+                stop_marker = write_stop_optimization_marker(
+                    optimization_root=optimization_root,
+                    iteration=current_iteration,
+                    next_iteration=target_next_iteration,
+                    stopping_report=stopping_report,
+                    phase="before_propose",
+                )
+                summary["normal_chain_stop"] = True
+                summary["normal_chain_stop_exit_code"] = NORMAL_CHAIN_STOP_EXIT_CODE
+                summary["stop_optimization_marker_written"] = str(stop_marker)
             write_optimization_state(optimization_root, stopped_state)
             summary["state_written"] = True
             summary["stopping_report_written"] = str(report_path)
@@ -347,6 +370,17 @@ def run_optimizer_loop_once(
             report=post_optimizer_stopping_report,
             report_path=report_path,
         )
+        if stop_after_materialization:
+            stop_marker = write_stop_optimization_marker(
+                optimization_root=optimization_root,
+                iteration=current_iteration,
+                next_iteration=target_next_iteration,
+                stopping_report=post_optimizer_stopping_report,
+                phase="after_optimizer",
+            )
+            summary["normal_chain_stop"] = True
+            summary["normal_chain_stop_exit_code"] = NORMAL_CHAIN_STOP_EXIT_CODE
+            summary["stop_optimization_marker_written"] = str(stop_marker)
         write_optimization_state(optimization_root, stopped_state)
         summary["state_written"] = True
         summary["loop_stopped_after_optimizer"] = True
@@ -397,6 +431,26 @@ def run_optimizer_loop_once(
     summary["init_case_states_result"] = init_states_result
     summary["next_iteration_audit"] = next_iterations[0]
     summary["optimization_state_after_propose"] = state_after_propose
+
+    if stop_after_materialization:
+        summary["submit_skipped_by_materialize_only"] = True
+        summary["dependent_tick_submit_skipped_by_materialize_only"] = True
+        summary["recommended_action"] = "wait_for_pre_submitted_chain"
+        report_path = _write_loop_report_if_execute(
+            optimization_root,
+            summary,
+            execute=execute,
+        )
+        if report_path is not None:
+            summary["loop_report_written"] = str(report_path)
+            state_with_report = attach_loop_report_to_iteration(
+                state_doc=state_after_propose,
+                iteration=target_next_iteration,
+                report_path=report_path,
+            )
+            write_optimization_state(optimization_root, state_with_report)
+            summary["optimization_state_after_loop_report"] = state_with_report
+        return summary
 
     submit_audit = run_optimizer_tick(
         optimization_root=optimization_root,
@@ -496,6 +550,29 @@ def run_optimizer_loop_once(
         summary["optimization_state_after_loop_report"] = state_with_report
 
     return summary
+
+
+def write_stop_optimization_marker(
+    *,
+    optimization_root: Path,
+    iteration: int,
+    next_iteration: int,
+    stopping_report: dict[str, Any],
+    phase: str,
+) -> Path:
+    path = stop_file_path(optimization_root)
+    payload = {
+        "schema_version": 1,
+        "created_at": now_utc(),
+        "iteration": int(iteration),
+        "next_iteration": int(next_iteration),
+        "phase": str(phase),
+        "overall_decision": stopping_report.get("overall_decision"),
+        "recommended_action": stopping_report.get("recommended_action"),
+        "reasons": stopping_report.get("reasons", []),
+    }
+    write_json_atomic(path, payload, dry_run=False)
+    return path
 
 
 def _propose_error_is_safe_loop_stop(message: str) -> bool:
@@ -633,6 +710,11 @@ def write_dependent_tick_script(plan: DependentOptimizerTickPlan) -> None:
 def execute_dependent_optimizer_tick_submit(
     plan: DependentOptimizerTickPlan,
 ) -> DependentOptimizerTickResult:
+    try:
+        assert_not_inside_slurm_job_for_sbatch()
+    except RuntimeError as exc:
+        raise OptimizerLoopError(str(exc)) from exc
+
     completed = subprocess.run(
         plan.submit_command,
         cwd=str(plan.working_directory),

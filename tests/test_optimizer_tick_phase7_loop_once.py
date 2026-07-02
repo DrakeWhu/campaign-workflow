@@ -531,6 +531,113 @@ class OptimizerTickPhase7LoopOnceTests(unittest.TestCase):
             json.dumps(config, indent=2) + "\n", encoding="utf-8"
         )
 
+    def test_run_loop_once_execute_stop_after_materialization_skips_all_sbatch(
+        self,
+    ) -> None:
+        with (
+            patch(
+                "campaign_workflow.optimizer_loop.execute_submit_iteration"
+            ) as submit_mock,
+            patch(
+                "campaign_workflow.optimizer_loop.execute_dependent_optimizer_tick_submit"
+            ) as tick_submit_mock,
+        ):
+            rc, stdout, stderr = self._run_cli(
+                "--action",
+                "run_loop_once",
+                "--iteration",
+                "0",
+                "--next-iteration",
+                "1",
+                "--array-spec",
+                "0-1",
+                "--workflow-root",
+                str(Path.cwd()),
+                "--workflow-env",
+                str(self.root / "workflow-env.sh"),
+                "--job-name-prefix",
+                "cw_bo002",
+                "--stop-after-materialization",
+                "--execute",
+            )
+
+        self.assertEqual(rc, 0, stderr)
+        submit_mock.assert_not_called()
+        tick_submit_mock.assert_not_called()
+
+        data = json.loads(stdout)
+        self.assertEqual(data["submit_mode"], "materialize_only")
+        self.assertTrue(data["stop_after_materialization"])
+        self.assertEqual(data["max_sbatch_calls_if_executed"], 0)
+        self.assertTrue(data["submit_skipped_by_materialize_only"])
+        self.assertTrue(data["dependent_tick_submit_skipped_by_materialize_only"])
+        self.assertEqual(data["recommended_action"], "wait_for_pre_submitted_chain")
+        self.assertNotIn("submit_plan", data)
+        self.assertNotIn("dependent_optimizer_tick_result", data)
+
+        state = json.loads(
+            (self.root / "optimization_state.json").read_text(encoding="utf-8")
+        )
+        iterations = {int(item["iteration"]): item for item in state["iterations"]}
+        self.assertEqual(iterations[0]["status"], "closed")
+        self.assertEqual(iterations[1]["status"], "campaign_materialized")
+        self.assertFalse(iterations[1]["submitted"])
+        self.assertEqual(iterations[1]["slurm_job_ids"], [])
+        self.assertEqual(iterations[1]["recommended_action"], "submit_iteration")
+        self.assertTrue((self.root / "iterations" / "iter_001").is_dir())
+
+    def test_run_loop_once_materialize_only_stopping_returns_reserved_exit_code(
+        self,
+    ) -> None:
+        self._write_optimization_state(max_iterations=1)
+        self._write_optimization_config(
+            command=[
+                sys.executable,
+                str(self.fake_optimizer),
+                "{optimizer_run_dir}",
+                "{next_iteration}",
+            ],
+            max_iterations=1,
+            stopping_enabled=True,
+        )
+
+        with (
+            patch(
+                "campaign_workflow.optimizer_loop.execute_submit_iteration"
+            ) as submit_mock,
+            patch(
+                "campaign_workflow.optimizer_loop.execute_dependent_optimizer_tick_submit"
+            ) as tick_submit_mock,
+        ):
+            rc, stdout, stderr = self._run_cli(
+                "--action",
+                "run_loop_once",
+                "--iteration",
+                "0",
+                "--next-iteration",
+                "1",
+                "--array-spec",
+                "0-1",
+                "--stop-after-materialization",
+                "--execute",
+            )
+
+        self.assertEqual(rc, 20, stderr)
+        submit_mock.assert_not_called()
+        tick_submit_mock.assert_not_called()
+
+        data = json.loads(stdout)
+        self.assertTrue(data["normal_chain_stop"])
+        self.assertEqual(data["normal_chain_stop_exit_code"], 20)
+        self.assertTrue((self.root / "STOP_OPTIMIZATION").is_file())
+
+        state = json.loads(
+            (self.root / "optimization_state.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(state["status"], "stopped")
+        self.assertEqual(state["stopped_at_iteration"], 0)
+        self.assertEqual(state["recommended_action"], "no_action")
+
 
 if __name__ == "__main__":
     unittest.main()

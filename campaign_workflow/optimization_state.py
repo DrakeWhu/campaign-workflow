@@ -12,6 +12,7 @@ from campaign_workflow.core.state import now_utc
 
 OPTIMIZATION_STATE_FILENAME = "optimization_state.json"
 PAUSE_FILENAME = "PAUSE_OPTIMIZATION"
+STOP_FILENAME = "STOP_OPTIMIZATION"
 LOCK_DIRNAME = ".optimizer_tick.lock"
 
 VALID_OPTIMIZATION_STATUSES = {
@@ -28,6 +29,7 @@ VALID_OPTIMIZATION_STATUSES = {
     "needs_inspection",
     "aborted",
     "paused",
+    "stopped",
 }
 
 VALID_RECOMMENDED_ACTIONS = {
@@ -59,6 +61,10 @@ def optimization_state_path(optimization_root: Path) -> Path:
 
 def pause_file_path(optimization_root: Path) -> Path:
     return optimization_root / PAUSE_FILENAME
+
+
+def stop_file_path(optimization_root: Path) -> Path:
+    return optimization_root / STOP_FILENAME
 
 
 def lock_dir_path(optimization_root: Path) -> Path:

@@ -416,6 +416,11 @@ def update_state_after_stopping(
     elif decision == "continue":
         updated["recommended_action"] = "propose_next_iteration"
     elif decision.startswith("stop_"):
+        updated["status"] = "stopped"
+        updated["stopped_at_iteration"] = iteration
+        updated["stop_reason"] = "; ".join(
+            str(reason) for reason in report.get("reasons", [])
+        )
         updated["recommended_action"] = "no_action"
     elif decision == "needs_human_review":
         updated["recommended_action"] = (
