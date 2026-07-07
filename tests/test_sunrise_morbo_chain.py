@@ -156,6 +156,9 @@ class SunriseMorboChainTests(unittest.TestCase):
         self.assertIn("--array=0-29", commands[2])
         self.assertIn("CW_ITERATION=2", " ".join(commands[0]))
         self.assertIn("CW_NEXT_ITERATION=3", " ".join(commands[1]))
+        self.assertIn("CONFIRM_CLEANUP_EXECUTE=1", " ".join(commands[0]))
+        self.assertIn("CONFIRM_CLEANUP_EXECUTE=1", " ".join(commands[2]))
+        self.assertIn("CONFIRM_CLEANUP_EXECUTE=1", " ".join(commands[4]))
 
         data = json.loads(stdout.getvalue())
         self.assertFalse(data["dry_run"])

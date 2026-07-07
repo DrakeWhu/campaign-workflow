@@ -246,6 +246,7 @@ def build_array_sbatch_command(
                     "CW_WORKFLOW_ROOT": args.workflow_root,
                     "CW_WORKFLOW_ENV": args.workflow_env,
                     "CW_JOB_NAME_PREFIX": args.job_name_prefix,
+                    "CONFIRM_CLEANUP_EXECUTE": "1",
                 }
             ),
             str(args.array_script),
