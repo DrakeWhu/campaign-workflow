@@ -17,6 +17,13 @@ if str(_REPO_ROOT) not in sys.path:
 
 from campaign_workflow.slurm_submit_guard import assert_not_inside_slurm_job_for_sbatch
 from campaign_workflow.submit_iteration import parse_sbatch_job_id
+from campaign_workflow.optimization_state import (
+    read_optimization_state,
+    write_optimization_state,
+)
+from campaign_workflow.presubmitted_chain import (
+    update_state_after_presubmitted_array,
+)
 
 
 class MorboChainSubmitError(RuntimeError):
@@ -319,14 +326,19 @@ def submit_finite_chain(args: ChainArgs) -> dict[str, Any]:
             dependency=array_dependency,
         )
         array_job_id = execute_sbatch(array_command, cwd=args.optimization_root)
-        jobs.append(
-            {
-                "kind": "array",
-                "iteration": iteration,
-                "dependency": array_dependency,
-                "job_id": array_job_id,
-                "submit_command": array_command,
-            }
+        array_job = {
+            "kind": "array",
+            "iteration": iteration,
+            "dependency": array_dependency,
+            "job_id": array_job_id,
+            "submit_command": array_command,
+        }
+        jobs.append(array_job)
+        register_existing_iteration_array_submit(
+            args=args,
+            jobs=jobs,
+            iteration=iteration,
+            array_job=array_job,
         )
 
         tick_dependency = f"afterok:{array_job_id}"
@@ -353,6 +365,49 @@ def submit_finite_chain(args: ChainArgs) -> dict[str, Any]:
     manifest_path = write_manifest(args.optimization_root, manifest)
     manifest["manifest_path"] = str(manifest_path)
     return manifest
+
+
+def register_existing_iteration_array_submit(
+    *,
+    args: ChainArgs,
+    jobs: list[dict[str, Any]],
+    iteration: int,
+    array_job: dict[str, Any],
+) -> None:
+    """Record array submit metadata for already-materialized iterations.
+
+    Finite chains pre-submit arrays for future iterations before those iterations
+    exist. Those future iterations are registered by optimizer ticks immediately
+    after materialization. For the initial iteration, however, the state already
+    exists and must be updated now; otherwise the first tick sees zero submitted
+    reduced-valid cases.
+    """
+
+    state_info = read_optimization_state(args.optimization_root)
+    state_doc = state_info.data
+    if state_doc is None:
+        return
+
+    if not any(
+        isinstance(item, dict) and int(item.get("iteration", -1)) == int(iteration)
+        for item in state_doc.get("iterations", [])
+    ):
+        return
+
+    partial_manifest = build_manifest(args=args, jobs=jobs, dry_run=False)
+
+    state_after_submit = update_state_after_presubmitted_array(
+        state_doc=state_doc,
+        optimization_root=args.optimization_root,
+        iteration=iteration,
+        manifest_path=args.optimization_root
+        / "loop_logs"
+        / "<pending-morbo-chain-manifest>",
+        manifest=partial_manifest,
+        array_job=array_job,
+    )
+
+    write_optimization_state(args.optimization_root, state_after_submit)
 
 
 def execute_sbatch(command: Sequence[str], *, cwd: Path) -> str:

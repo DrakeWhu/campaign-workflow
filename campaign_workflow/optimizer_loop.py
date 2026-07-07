@@ -49,6 +49,10 @@ from campaign_workflow.submit_iteration import (
 from campaign_workflow.slurm_submit_guard import (
     assert_not_inside_slurm_job_for_sbatch,
 )
+from campaign_workflow.presubmitted_chain import (
+    find_latest_chain_manifest_for_array,
+    update_state_after_presubmitted_array,
+)
 
 
 NORMAL_CHAIN_STOP_EXIT_CODE = 20
@@ -433,23 +437,59 @@ def run_optimizer_loop_once(
     summary["optimization_state_after_propose"] = state_after_propose
 
     if stop_after_materialization:
+        state_for_report = state_after_propose
+
+        pre_submitted = find_latest_chain_manifest_for_array(
+            optimization_root=optimization_root,
+            iteration=target_next_iteration,
+            job_name_prefix=job_name_prefix,
+        )
+
+        if pre_submitted is not None:
+            manifest_path, chain_manifest, array_job = pre_submitted
+            state_for_report = update_state_after_presubmitted_array(
+                state_doc=state_after_propose,
+                optimization_root=optimization_root,
+                iteration=target_next_iteration,
+                manifest_path=manifest_path,
+                manifest=chain_manifest,
+                array_job=array_job,
+            )
+            write_optimization_state(optimization_root, state_for_report)
+
+            summary["pre_submitted_array_metadata_registered"] = True
+            summary["pre_submitted_array_metadata"] = {
+                "iteration": target_next_iteration,
+                "job_id": array_job.get("job_id"),
+                "array_spec": chain_manifest.get("array_spec"),
+                "manifest_path": str(manifest_path),
+            }
+            summary["optimization_state_after_presubmitted_array_register"] = (
+                state_for_report
+            )
+        else:
+            summary["pre_submitted_array_metadata_registered"] = False
+
         summary["submit_skipped_by_materialize_only"] = True
         summary["dependent_tick_submit_skipped_by_materialize_only"] = True
         summary["recommended_action"] = "wait_for_pre_submitted_chain"
+
         report_path = _write_loop_report_if_execute(
             optimization_root,
             summary,
             execute=execute,
         )
+
         if report_path is not None:
             summary["loop_report_written"] = str(report_path)
             state_with_report = attach_loop_report_to_iteration(
-                state_doc=state_after_propose,
+                state_doc=state_for_report,
                 iteration=target_next_iteration,
                 report_path=report_path,
             )
             write_optimization_state(optimization_root, state_with_report)
             summary["optimization_state_after_loop_report"] = state_with_report
+
         return summary
 
     submit_audit = run_optimizer_tick(

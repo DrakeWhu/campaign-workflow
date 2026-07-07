@@ -204,6 +204,64 @@ class SunriseMorboChainTests(unittest.TestCase):
         run_mock.assert_not_called()
         self.assertIn("missing optimization.json", stderr.getvalue())
 
+    def test_execute_records_start_iteration_submit_metadata(self) -> None:
+        tmp, root, workflow_env = self._make_root()
+        self.addCleanup(tmp.cleanup)
+
+        state_path = root / "optimization_state.json"
+        state_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "optimization_name": "bo_root",
+                    "status": "campaign_materialized",
+                    "updated_at": "2026-07-07T00:00:00Z",
+                    "latest_iteration": 2,
+                    "iterations": [
+                        {
+                            "iteration": 2,
+                            "status": "campaign_materialized",
+                            "recommended_action": "submit_iteration",
+                            "submitted": False,
+                            "slurm_job_ids": [],
+                            "campaign_root": "iterations/iter_002",
+                        }
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        stdout = io.StringIO()
+        submitted_ids = iter(["100", "101", "102", "103", "104", "105"])
+
+        def fake_run(command, **kwargs):
+            job_id = next(submitted_ids)
+            return SimpleNamespace(returncode=0, stdout=f"{job_id}\n", stderr="")
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(self.module.subprocess, "run", side_effect=fake_run):
+                with contextlib.redirect_stdout(stdout):
+                    rc = self.module.main(
+                        self._base_argv(root, workflow_env) + ["--execute"]
+                    )
+
+        self.assertEqual(rc, 0)
+
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        iteration = state["iterations"][0]
+
+        self.assertEqual(iteration["iteration"], 2)
+        self.assertEqual(iteration["status"], "submitted")
+        self.assertEqual(iteration["recommended_action"], "wait_for_jobs")
+        self.assertTrue(iteration["submitted"])
+        self.assertEqual(iteration["slurm_job_ids"], ["100"])
+        self.assertEqual(iteration["array_spec"], "0-29")
+        self.assertEqual(iteration["submitted_case_ids"], list(range(30)))
+        self.assertEqual(iteration["submitted_case_count"], 30)
+        self.assertIn("run_iteration_array.sh", iteration["submit_script"])
+
 
 if __name__ == "__main__":
     unittest.main()
