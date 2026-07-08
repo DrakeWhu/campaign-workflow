@@ -1,2 +1,2 @@
-﻿"""Generic campaign workflow package."""
-__version__ = "0.1.0"
+"""Generic campaign workflow package."""
+__version__ = "1.0.0"

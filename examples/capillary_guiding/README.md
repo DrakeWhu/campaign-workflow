@@ -1,77 +1,93 @@
 # Capillary guiding example
 
-This directory documents the first concrete production example for the generic campaign workflow.
+This directory documents the current production example for `campaign-workflow`: a WarpX/PyWarpX capillary guiding campaign on SUNRISE.
 
-It is based on a WarpX/PyWarpX campaign where:
+It is an example configuration and wrapper set, not the generic workflow core.
 
-- `cases.tsv` defines the case matrix;
-- each `CASE_ID` maps to a `CASE_NAME`;
-- each case directory contains an `input.py` driven by environment variables;
-- WarpX writes openPMD/HDF5 diagnostics;
-- a guiding analysis module reduces raw diagnostics to a metrics CSV;
-- raw HDF5 files may become cleanup-eligible after validation.
-
-## Why this is an example
-
-The campaign workflow must not be designed around capillary guiding specifically.
+## What is generic
 
 The reusable workflow concepts are:
 
 ```text
-case manifest
-case directory
+campaign.json
+cases.tsv
+case directories
+state.json
+validation.json
 raw diagnostics
 raw validation
+external analysis
 reduced outputs
 reduced validation
-safe cleanup
-state machine
-locks
-manifests
+cleanup manifests
 storage snapshots
+optimizer iterations
 ```
 
-The capillary-specific concepts are:
+## What is capillary-specific
 
+The capillary campaign uses domain-specific columns and environment variables such as:
+
+```text
+LASER_CASE
+PLASMA_KIND
+N0_CM3
+PLATEAU_LENGTH_MM
+RADIUS_UM
+FOCUS_OFFSET_FROM_PLATEAU_START_MM
+CAP_RMAX_UM
+CAP_NR
+CAP_* environment variables
 ```
-laser case
-plasma kind
-capillary radius
-plateau length
-focus offset
-guiding metrics
-uniform/vacuum/channel triplets
+
+Those defaults remain in the `1.0.0` materializer for compatibility with the proven production campaigns. They should be generalized in a later minor release, not during the 1.0 freeze.
+
+## Files in this example
+
+```text
+campaign.json                              example campaign contract
+resolve_field_diag_dir.py                  field diagnostic resolver helper
+run_guiding_case_analysis_sunrise.sh       SUNRISE wrapper for guiding analysis
+run_particle_analysis_if_available.py      optional particle analysis wrapper
 ```
 
-The second group must not leak into the workflow core.
+Operational SUNRISE scripts live in:
 
-## Expected real campaign layout on SUNRISE
-
+```text
+examples/sunrise/
 ```
-capillaries_bo_full_campaign/
+
+Important scripts:
+
+```text
+submit_case_cycle_array.sh
+run_warpx_case_sunrise.sh
+submit_morbo_chain.py
+run_optimizer_tick_materialize_only.sh
+run_iteration_array.sh
+```
+
+## Expected campaign root
+
+```text
+capillaries_campaign/
 ├── campaign.json
 ├── cases.tsv
-├── submit_campaign_array.sh
+├── input_template.py
 ├── workflow/
+├── array_logs/
 └── CASE_DIRS...
 ```
 
-The `campaign.json` in this directory is a template/example. The real campaign should copy or adapt it at campaign root.
-
-## Deployment idea
-
-On SUNRISE:
-```bash 
-cd /gpfs/home/jrodriguez/warpx_runs/capillaries_bo_full_campaign
-git clone <repo-url> workflow
-cp workflow/examples/capillary_guiding/campaign.json ./campaign.json
-```
-
-Then workflow commands can be called with:
+Typical setup:
 
 ```bash
+cd /gpfs/home/jrodriguez/warpx_runs/capillaries_campaign
 export PYTHONPATH="$PWD/workflow:${PYTHONPATH:-}"
-python -m campaign_workflow.cli.init_case_states --campaign-root . --dry-run
+
+python -m campaign_workflow.cli.materialize_cases --campaign-root . --dry-run --verbose
+python -m campaign_workflow.cli.materialize_cases --campaign-root .
+python -m campaign_workflow.cli.init_case_states --campaign-root . --check
 ```
 
-Operational scripts are not implemented in phase 0
+For production runs on SUNRISE, prefer the static scripts under `examples/sunrise/` rather than ad hoc launchers.

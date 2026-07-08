@@ -1,521 +1,244 @@
-# Campaign workflow
+# Campaign workflow contract
+
+This document is normative for `campaign-workflow` `1.0.0`.
 
 ## Purpose
 
-This workflow manages simulation campaigns where many independent cases are launched, validated, analyzed, summarized, and eventually cleaned up.
+`campaign-workflow` orchestrates simulation campaigns as explicit file-based transactions. It is designed for HPC runs where raw outputs are large, analysis is external, and cleanup must be conservative.
 
-The design target is HPC execution with SLURM arrays, heavy raw diagnostics, and reduced analysis products. The first production use case is WarpX/PyWarpX on SUNRISE, but the workflow must remain general enough to support different inputs, diagnostics, and analysis modules.
+The workflow is daemon-free: every operation is a finite CLI invocation that reads configuration and evidence from disk, writes explicit state/evidence files, and exits.
 
-## Core rule
+## Boundaries
 
-The workflow core must not know about capillaries, guiding, laser waist, plasma density, or any specific physics quantity.
+The workflow core owns:
 
-The workflow core only knows about:
+- campaign configuration loading;
+- case manifest loading;
+- case directory creation and materialization;
+- state transitions;
+- validation evidence;
+- lifecycle markers;
+- raw diagnostic validation;
+- reduced-output validation;
+- command-based analysis invocation;
+- storage accounting;
+- cleanup manifests and raw file deletion;
+- optimization iteration bookkeeping and finite tick execution.
 
-- campaign configuration;
-- case manifests;
-- case directories;
-- states;
-- validations;
-- locks;
-- manifests;
-- storage snapshots;
-- safe cleanup.
+The workflow core does not own:
 
-Physics-specific logic belongs in the simulation input and analysis adapters.
+- physical simulation parameters;
+- WarpX/PICMI input semantics;
+- scientific metric definitions;
+- optimizer model internals;
+- scheduler policy beyond static script interfaces;
+- a resident parent daemon.
 
 ## Campaign root
 
-A campaign root is a directory containing:
+A campaign root contains at least:
 
 ```text
 campaign_root/
 ├── campaign.json
 ├── cases.tsv
-├── workflow/
-├── slurm scripts or submit scripts
-└── case directories
+└── CASE_DIRS...
 ```
 
-`campaign.json` is mutable only by deliberate workflow configuration changes.
-
-`cases.tsv` is immutable once the campaign starts.
-
-Case directories are addressed through the `case_id_column` and `case_name_column` defined in `campaign.json`.
-
-## Case directory materialization
-
-Before case states are initialized, campaign case directories are created explicitly from the immutable case manifest.
-
-The intended bootstrap sequence for a new campaign is:
-
-```bash
-python -m campaign_workflow.cli.create_case_dirs \
-  --campaign-root . \
-  --dry-run \
-  --verbose
-
-python -m campaign_workflow.cli.create_case_dirs \
-  --campaign-root . \
-  --verbose
-
-python -m campaign_workflow.cli.init_case_states \
-  --campaign-root . \
-  --verbose
-```
-
-`create_case_dirs` is a minimal, generic, non-physical workflow phase.
-
-It reads:
+For materialized simulation campaigns it normally also contains:
 
 ```text
-campaign.json
-cases.tsv
-```
-
-It uses the configured case manifest parser to identify:
-
-```text
-CASE_ID
-CASE_NAME
-```
-
-It validates that:
-
-```text
-cases.tsv exists
-cases.tsv contains at least one row
-CASE_ID values are valid according to the existing manifest parser
-CASE_NAME values are not empty
-CASE_NAME values are not duplicated
-CASE_NAME values are relative paths
-CASE_NAME values do not contain ..
-resolved case directories stay inside campaign_root
-```
-
-In write mode, it creates:
-
-```text
-CASE_DIR/
-├── logs/
-├── post/
-├── manifests/
-├── locks/
-├── diags/
-└── checkpoints/
-```
-
-The command is idempotent:
-
-```text
-existing case directories are accepted
-existing subdirectories are accepted
-existing files are not overwritten
-nothing is deleted
-destructive_operations=0
-```
-
-This phase deliberately does not create or modify:
-
-```text
-state.json
-validation.json
-cases.tsv
-campaign.json
 input_template.py
-input.py
-case.env
-raw diagnostics
-reduced outputs
+workflow/                  # git checkout or equivalent PYTHONPATH source
+array_logs/
+snapshots/
 ```
 
-This phase also deliberately does not implement:
+`campaign.json` defines the workflow contract. `cases.tsv` defines the case manifest and is treated as stable once production execution begins.
+
+## Case identity
+
+Cases are loaded from the configured manifest:
+
+```json
+{
+  "case_manifest": "cases.tsv",
+  "case_manifest_format": "tsv",
+  "case_id_column": "CASE_ID",
+  "case_name_column": "CASE_NAME"
+}
+```
+
+Each case must have a unique integer `CASE_ID` and a safe single-directory `CASE_NAME`.
+
+## Case-local layout
+
+By default each case directory contains:
 
 ```text
-WarpX/PyWarpX input preparation
-SLURM submitter generation
-case.env generation
-cases.tsv -> environment variable mapping
-simulation execution
-analysis execution
-BO/MORBO logic
-cleanup
-```
-
-Simulation-specific materialization, such as copying `input_template.py`, generating `case.env`, or mapping physical columns from `cases.tsv` into environment variables, belongs in a later campaign-specific preparation layer, not in this generic workflow phase.
-
-## Case directory ownership
-
-Each case owns its own runtime artifacts:
-
-```
 CASE_DIR/
 ├── state.json
 ├── validation.json
 ├── locks/
 ├── manifests/
 ├── post/
-├── logs/
-├── raw diagnostics
-├── reduced outputs
-└── plots or reports
+└── logs/
 ```
 
-No case should write into another case directory.
+The filenames and subdirectories are controlled by the optional `state` section in `campaign.json`.
 
-Global summaries may be produced later by reading case-local validated outputs.
+## Materialization
 
-## Execution model: case-local cycle plus campaign-wide ticks
-
-The workflow separates responsibilities by phase, but this does not require one
-SLURM job per phase.
-
-The preferred production model for expensive WarpX/PyWarpX campaigns is a
-case-local cycle executed by a SLURM array task:
+`materialize_cases` creates the case-local simulation files:
 
 ```text
-case cycle array task
-  -> mark_sim_submitted
-  -> mark_sim_running
-  -> run external simulation
-  -> mark_sim_done or mark_sim_failed
-  -> validate_raw_case
-  -> analyze_case
-  -> mark_raw_delete_eligible
-  -> cleanup_raw_case --dry-run
-  -> optionally cleanup_raw_case --execute
+CASE_DIR/input.py
+CASE_DIR/case.env
 ```
 
-The simulation step dominates walltime. Raw validation, analysis/reduced
-validation, cleanup eligibility, and cleanup dry-run are expected to be much
-shorter for the current campaign class, so executing them immediately after a
-successful simulation avoids unnecessary intermediate scheduling overhead.
+It copies `input_template.py` and renders `case.env` from `cases.tsv` using `case_materialization` rules.
 
-The separation remains semantic and transactional:
+The `1.0.0` default materialization profile is the proven capillary guiding `CAP_*` mapping. This remains for backward compatibility with the production SUNRISE campaigns. New non-capillary campaigns should declare explicit `case_materialization.env_columns` and `env_constants` in `campaign.json`.
 
-- every phase writes explicit workflow evidence;
-- every phase may fail independently;
-- logs must identify the phase that failed;
-- cleanup still requires validated raw evidence, validated reduced evidence,
-- explicit eligibility, and a validated dry-run manifest;
-- cleanup execute remains optional and must require explicit confirmation.
+`materialize_cases` refuses to overwrite existing `input.py` or `case.env` unless `--overwrite` is passed.
 
-There is no resident parent orchestrator in V1.
+## Simulation lifecycle
 
-Campaign-wide jobs are allowed only when the operation is intrinsically global,
-for example:
-
-```
-storage snapshot
-optimizer tick
-ranking / objective aggregation
-candidate proposal
-campaign summary reports
-```
-
-A launcher may submit one or more jobs and exit immediately. Such a launcher is
-not a resident orchestrator. It must not occupy a long walltime partition while
-waiting or polling.
-
-## Cooperative campaign maintenance ticks
-
-A real SUNRISE production campaign showed that the workflow also needs
-lock-protected campaign maintenance operations.
-
-A maintenance tick is a short campaign-wide operation that may be invoked by a
-case-local SLURM task after it finishes its own case-local cycle.
-
-The key rule is:
+The workflow records simulation lifecycle evidence through marker CLIs:
 
 ```text
-case-local work remains case-local;
-campaign-wide maintenance must acquire a campaign-wide lock.
-
-A case job may attempt to launch a maintenance tick, but the tick is not owned by
-that case. It is a campaign operation executed under a campaign lock.
-
-This avoids a resident parent daemon while still allowing the campaign to
-self-maintain.
-
-A maintenance tick may eventually inspect:
-
-quota usage
-live raw HDF5 size
-running jobs
-stale Running cases
-walltime risk
-rerun candidates
-SLURM array throttles
-validated reduced outputs
-optimizer readiness
-
-It may eventually perform safe campaign-wide actions such as:
-
-lowering or raising array throttles
-marking cases as walltime_insufficient
-canceling jobs that cannot finish within walltime
-planning reruns in a longer partition
-submitting rerun arrays
-creating quota/walltime reports
-
-A maintenance tick must not:
-
-act without a campaign-wide lock
-edit WarpX/PyWarpX physics inputs
-modify cases.tsv in place
-delete directories
-delete files outside CASE_DIR
-delete raw files without an explicit manifest
-reinterpret cleanup globs at execute time
-silently retry cases
-become a resident daemon
-run BO/MORBO as part of a case-local cycle
-
-The maintenance tick is allowed to write into multiple case directories only
-because it is a campaign-wide locked operation, not because one case owns another
-case's files.
-
-This is the intended future pattern:
-
-case-local cycle finishes
-  -> attempts maintenance_tick
-  -> if campaign lock is available:
-       inspect campaign
-       apply safe maintenance actions
-       release lock
-     else:
-       another job is maintaining the campaign; exit OK
-Walltime guard
-
-The first real production campaign showed that walltime cannot always be chosen
-statically.
-
-For example, a 25 mm WarpX case with:
-
-max_steps = 448000
-avg_s_per_step ≈ 0.07
-
-requires roughly:
-
-448000 * 0.07 s ≈ 8.7 h
-
-before analysis and cleanup. Such a case does not fit in a T6H partition even if
-shorter cases in the same campaign do.
-
-A future walltime guard should estimate, for every Running case:
-
-current_step
-max_steps
-avg_s_per_step
-elapsed_walltime
-remaining_walltime
-safety_margin
-eta_remaining
-
-and classify the case as:
-
-OK
-TIGHT
-TIMEOUT_RISK
-UNKNOWN
-
-If a case is clearly unable to finish within the current walltime, a future active
-guard may:
-
-cancel the SLURM array task
-mark the case as failed with failure_kind=walltime_insufficient
-record the current progress estimate
-clean partial raw files using a special partial-raw cleanup manifest
-mark the case as rerun-planned
-submit the case again in a longer partition
-
-This must be explicit and auditable. The workflow must not silently retry.
-
-Rerun planning
-
-Rerun planning is a campaign-wide operation.
-
-The workflow should eventually support generating rerun batches from cases whose
-failure evidence indicates that rerun is safe and useful.
-
-A rerun plan should record:
-
-source campaign
-case IDs
-previous partition/time limit
-recommended partition/time limit
-failure_kind
-reason for rerun
-whether partial raw was cleaned
-submission command or sbatch job id
-
-Rerun planning must not modify the original cases.tsv in place. If new
-candidate cases are created by an optimizer, they must be written into a new
-batch manifest.
-
-Quota guard
-
-A quota guard is another campaign maintenance operation.
-
-It should inspect real user quota, not only filesystem capacity. On SUNRISE the
-working command for the current filesystem was:
-
-lfs quota -h -u "$USER" .
-
-The guard may eventually:
-
-report used/quota/limit
-report live raw HDF5 size
-delay new submissions if quota is high
-lower SLURM array throttles
-prioritize cleanup of already validated cases
-stop launching reruns if quota is unsafe
-
-Quota pressure alone must not justify unsafe deletion. Cleanup rules still apply.
-
-## Data clases
-
-The workflow distinguishes three levels of data.
-
-### Raw diagnostics
-
-Large outputs produced by the simulation backend.
-
-Examples:
-- WarpX openPMD/HDF5 files
-- ADIOS2 outputs
-- SDF files
-- large image stacks
-
-Raw diagnostics are expensive to store and may become cleanup-eligible after validation and reduction.
-
-### Reduced diagnostics
-
-Small persistent analysis outputs.
-
-Examples:
-- Metrics CSV
-- Scalar summaries
-- Compact Parquet tables
-- Analysis JSON
-- Diagnostic plots
-
-Reduced outputs are the persistent scientific products of V1.
-
-### Evidence files
-
-Small JSON or text files proving that a transition happened safely.
-
-Examples:
-- `post/sim_done.json`
-- `post/analysis_done.json`
-- raw validation manidests
-- cleanup manifests
-- validation.json
-
-Evidence files are never optional for destructive operations
-
-## Generic state flow
-
-```
-Created
-Submitted
-Running
-Sim_done
-Raw_validated
-Analyzing
-Reduced_validated
-Raw_delete_eligible
-Raw_deleted
+mark_sim_submitted
+mark_sim_running
+mark_sim_done
+mark_sim_failed
 ```
 
-Side states:
+Markers are written under `CASE_DIR/post/` by default:
 
-```
-Failed
-Retryable
-Stale
-Quarantined
-Validation_failed
-Analysis_failed
-Cleanup_failed
-Disk_wait
+```text
+post/sim_submitted.json
+post/sim_running.json
+post/sim_done.json
+post/sim_failed.json
 ```
 
-The exact meaning of raw and reduced data is defined by `campaign.json`
+The external simulation runner owns the actual code execution. For WarpX/PyWarpX this is normally a shell wrapper that loads modules, activates the correct environment, sources `case.env`, and runs the case-local `input.py`.
 
-### Idempotency
+## Raw validation
 
-Every operation must be safe to run more than once.
+`validate_raw_case` validates configured raw diagnostics after simulation completion.
 
-Examples:
-- initializing states twice must not corrupt histories
-- validating raw outputs twice must produce the same result or a newer validation report
-- dry-run cleanup may be repeated
-- execute cleanup may be rpeated and report that files are already gone only if prior deletion evidence exists
+Supported raw diagnostic kinds in `1.0.0`:
 
-### Atomicity
-
-State and validation files must be written atomically:
-1. write temporary file in the same directory
-2. fsync if practical
-3. rename into place
-
-A partially written JSON file is treated as corruption and should move the case to `Quarantined` or require manual inspection
-
-### Locking
-
-Locks are directory-based where possible:
-```
-CASE_DIR/locks/<operation>.lock/
+```text
+fake
+openpmd_hdf5
 ```
 
-Creating a lock directory is atomic on POSIX filesystems
+For `openpmd_hdf5`, the validator checks path safety, glob resolution inside the case directory, file count, suffix, non-empty files, minimum age, and HDF5 readability. It does not interpret the physics content.
 
-A lock directory contains metadata:
-```
-{
-  "operation": "validate_raw",
-  "owner_job_id": "...",
-  "array_task_id": "...",
-  "hostname": "...",
-  "pid": "...",
-  "created_at": "...",
-  "expires_at": "..."
+Successful raw validation writes validation evidence and raw manifests. Failed required diagnostics prevent the case from advancing.
+
+## Analysis
+
+`analyze_case` invokes the configured external analysis adapter. The production adapter type is command-based:
+
+```json
+"analysis": {
+  "adapter": "command",
+  "command": ["bash", "path/to/wrapper.sh", "{case_dir}"],
+  "outputs": [...]
 }
 ```
-Stale locks may be recovered only after explicit expiration checks
 
-### Cleanup philosophy
+The workflow captures stdout/stderr into case-local logs, records analysis markers, and validates configured reduced outputs after the command returns.
 
-Cleanup is not an afterthought. Cleanup is a separately validated workflow phase.
+Scientific interpretation belongs to the external analysis module.
 
-Raw files may be deleted only when:
-- raw validation succeeded;
-- reduced validation succeeded;
-- the case is not running;
-- an explicit delete manifest exists;
-- every path in the manifest is inside the case directory;
-- every path in the manifest matches the configured raw-delete rules;
-- validation is re-run immediately before deletion.
+## Reduced validation
 
-### Extension points
+`validate_reduced_case` validates `analysis.outputs`. The supported reduced output kind in `1.0.0` is CSV.
 
-The core workflow should support replacing:
+For CSV outputs the validator checks:
 
-- simulation backend
-- input template
-- raw diagnostic kind
-- analysis module
-- reduced output contract
-- cleanup globs
-- scheduler backend
+- path safety inside `CASE_DIR`;
+- readability as CSV;
+- minimum row count;
+- required columns;
+- required/optional output semantics.
 
-The first implemented adapters are expected to be:
+`--legacy-reduced-only` exists for adopted campaigns where raw diagnostics are no longer available. It does not create raw validation evidence and never authorizes cleanup.
+
+## Cleanup
+
+Cleanup is conservative and manifest-driven.
+
+The normal path is:
+
+```text
+Reduced_validated
+-> Raw_delete_eligible
+-> cleanup dry-run manifest
+-> cleanup execute
+-> Raw_deleted
 ```
-simulation backend: warpx_picmi
-raw diagnostic: openpmd_hdf5
-analysis: guiding
-scheduler: slurm
+
+`cleanup_raw_case --dry-run` creates or updates a manifest of exact files eligible for deletion. It does not delete data.
+
+`cleanup_raw_case --execute` deletes only files listed in an existing validated manifest. It never deletes directories and must not follow paths outside the case directory.
+
+## Storage snapshots
+
+`storage_snapshot` computes campaign-level and case-level storage accounting without modifying raw data. The default output is:
+
+```text
+snapshots/storage_snapshot_latest.json
 ```
-These adapters must not leak campaign-specific assumptions into the core
+
+Snapshots are informational. They do not authorize deletion by themselves.
+
+## Optimization orchestration
+
+Optimization is represented by an `optimization_root` containing iteration campaign roots and optimizer run outputs:
+
+```text
+optimization_root/
+├── optimization.json
+├── optimization_state.json
+├── iterations/
+│   └── iter_000/
+└── optimizer_runs/
+    └── iter_001/
+        └── outputs/
+```
+
+`optimizer_tick` can:
+
+- audit finite iteration state;
+- initialize or write `optimization_state.json`;
+- evaluate configured guards;
+- evaluate stopping conditions;
+- submit an iteration through a static SLURM script;
+- reconcile completed iteration state;
+- call an external optimizer command;
+- verify optimizer outputs;
+- prepare and materialize the next iteration campaign;
+- execute one finite loop step.
+
+The optimizer model itself is external. The workflow consumes its files.
+
+## SUNRISE finite-chain model
+
+On SUNRISE, the production-safe model is a finite pre-submitted chain from the login node. It avoids assuming that nested `sbatch` from compute nodes is available.
+
+The static scripts under `examples/sunrise/` are part of the operational example and should be versioned with campaign changes.
+
+## Test contract
+
+The project test command is:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+A documentation-only release should still pass the full suite.

@@ -1,235 +1,317 @@
-# Campaign configuration contract
+# Configuration contract
 
-## Purpose
+This document describes the configuration keys consumed by `campaign-workflow` `1.0.0`.
 
-`campaign.json` defines how the generic workflow should interpret one concrete campaign.
+There are two main configuration files:
 
-It maps generic workflow concepts to campaign-specific files, diagnostics, analysis modules, and cleanup rules.
+```text
+campaign_root/campaign.json
+optimization_root/optimization.json
+```
 
-## Required top-level fields
+`campaign.json` describes one simulation campaign. `optimization.json` describes how an optimization root advances between campaign iterations.
+
+## campaign.json
+
+### Required campaign identity and manifest fields
 
 ```json
 {
   "schema_version": 1,
   "campaign_name": "example_campaign",
   "case_manifest": "cases.tsv",
-  "case_id_column": "CASE_ID",
-  "case_name_column": "CASE_NAME",
-  "simulation": {},
-  "raw_diagnostics": [],
-  "analysis": {},
-  "cleanup": {}
-}
-```
-
-## Case manifest
-
-The case manifest is usually a TSV file.
-
-Required concepts:
-
-- case ID
-- case directory name
-
-Example:
-```json
-{
-  "case_manifest": "cases.tsv",
+  "case_manifest_format": "tsv",
   "case_id_column": "CASE_ID",
   "case_name_column": "CASE_NAME"
 }
 ```
 
-The manifest is immutable after campaign start.
+Requirements:
 
-If a future optimizer proposes new candidates, it must write them to a new batch manifest rather than modifying the original manifest in place.
+- `schema_version` must be `1`.
+- `case_manifest_format` is currently `tsv`.
+- `CASE_ID` values must be integer-like and unique.
+- `CASE_NAME` values must be unique, safe, single relative directory names.
 
-## Simulation section
+### Optional state layout
 
-Example:
 ```json
-{
-  "simulation": {
-    "backend": "warpx_picmi",
-    "scheduler": "slurm",
-    "input_script": "input.py",
-    "completion_marker": "post/sim_done.json",
-    "failure_marker": "post/sim_failed.json"
+"state": {
+  "state_file": "state.json",
+  "validation_file": "validation.json",
+  "locks_dir": "locks",
+  "manifests_dir": "manifests",
+  "post_dir": "post",
+  "logs_dir": "logs"
+}
+```
+
+Defaults are the values shown above. These paths are case-relative.
+
+### Simulation section
+
+```json
+"simulation": {
+  "backend": "warpx_picmi",
+  "scheduler": "slurm",
+  "input_script": "input.py",
+  "completion_marker": "post/sim_done.json",
+  "failure_marker": "post/sim_failed.json"
+}
+```
+
+The workflow uses this section for metadata, materialization defaults, and marker checks. It does not interpret the simulation physics.
+
+### Case materialization section
+
+```json
+"case_materialization": {
+  "input_template": "input_template.py",
+  "input_name": "input.py",
+  "env_name": "case.env",
+  "env_columns": [
+    {"column": "CASE_ID", "env": "CASE_ID", "required": true},
+    {"column": "DENSITY_CM3", "env": "DENSITY_M3", "required": true, "scale": "1e6"}
+  ],
+  "env_constants": {
+    "DIAG_PRESET": "fields"
   }
 }
 ```
-The core workflow does not run simulations directly in V1. It only records and validates evidence produced by simulation jobs.
 
-Raw diagnostics section
+Fields:
 
-Example:
+- `input_template`: campaign-root-relative source file copied into each case.
+- `input_name`: case-relative output filename. Defaults to `simulation.input_script` or `input.py`.
+- `env_name`: case-relative environment file. Defaults to `case.env`.
+- `env_columns`: list of mappings from TSV columns to shell environment variables.
+- `env_columns[].required`: if true, missing or empty values fail materialization.
+- `env_columns[].scale`: optional decimal multiplier applied before rendering.
+- `env_constants`: object or list of `{ "env": ..., "value": ... }` entries.
+
+If `env_columns` is absent, `1.0.0` uses the legacy capillary guiding `CAP_*` defaults required by the current production campaigns. Non-capillary campaigns should set this section explicitly.
+
+If `env_constants` is absent, the legacy defaults are:
+
+```text
+CAP_DIAG_PRESET=guiding_rhoe
+CAP_LONG_PROFILE=both
+```
+
+### Raw diagnostics
+
 ```json
-{
-  "raw_diagnostics": [
+"raw_diagnostics": [
+  {
+    "name": "fields_openpmd",
+    "kind": "openpmd_hdf5",
+    "glob": "diags/**/*.h5",
+    "allowed_suffixes": [".h5", ".hdf5"],
+    "min_files": 1,
+    "min_age_seconds": 600,
+    "required": true
+  }
+]
+```
+
+Supported `kind` values:
+
+```text
+fake
+openpmd_hdf5
+```
+
+`glob` is case-relative and must stay inside the case directory. `path` may appear in example configs as descriptive metadata, but validation uses `glob`.
+
+### Analysis section
+
+```json
+"analysis": {
+  "name": "guiding",
+  "kind": "command",
+  "adapter": "command",
+  "inputs": ["fields_openpmd"],
+  "command": ["bash", "{campaign_root}/workflow/examples/capillary_guiding/run_guiding_case_analysis_sunrise.sh", "{case_dir}"],
+  "outputs": [
     {
-      "name": "fields_openpmd",
-      "kind": "openpmd_hdf5",
-      "path": "diags",
-      "glob": "diags/**/*.h5",
-      "min_files": 1,
-      "min_age_seconds": 600,
+      "name": "guiding_metrics",
+      "kind": "csv",
+      "path": "guiding_metrics.csv",
+      "min_rows": 1,
+      "required_columns": ["iteration", "time_fs"],
       "required": true
     }
   ]
 }
 ```
-`kind` selects a validator adapter.
 
-Initial planned kinds:
-```
-openpmd_hdf5
-```
-Future possible kinds:
-```
-openpmd_adios
-sdf
-image_stack
-custom_directory
+Supported production adapter:
+
+```text
+command
 ```
 
-## Analysis section
+Supported reduced output kind:
 
-Example:
+```text
+csv
+```
+
+Available command placeholders include:
+
+```text
+{campaign_root}
+{case_dir}
+{case_id}
+{case_name}
+```
+
+The command receives environment variables such as `CAMPAIGN_ROOT`, `CAMPAIGN_NAME`, `CASE_DIR`, `CASE_ID`, and `CASE_NAME` from the command adapter.
+
+### Cleanup section
+
 ```json
-{
-  "analysis": {
-    "name": "guiding",
-    "kind": "python_module",
-    "adapter": "guiding",
-    "inputs": ["fields_openpmd"],
-    "outputs": [
-      {
-        "name": "guiding_metrics",
-        "kind": "csv",
-        "path": "post/guiding_metrics.csv",
-        "required_columns": []
-      }
-    ]
+"cleanup": {
+  "raw_delete_globs": ["diags/**/*.h5", "diags/**/*.hdf5"],
+  "require_raw_validated": true,
+  "require_reduced_validated": true,
+  "require_delete_manifest": true,
+  "allow_directory_delete": false
+}
+```
+
+Rules:
+
+- `raw_delete_globs` are case-relative.
+- cleanup deletes files only;
+- `allow_directory_delete` must remain `false` for the supported workflow;
+- execute mode requires a valid dry-run manifest.
+
+### Storage section
+
+```json
+"storage": {
+  "snapshot_dir": "snapshots",
+  "reservation_dir": "reservations",
+  "events_dir": "events"
+}
+```
+
+`storage_snapshot` currently writes to `snapshots/storage_snapshot_latest.json` by default unless `--output` is provided.
+
+## optimization.json
+
+`optimization.json` lives at the optimization root.
+
+### External optimizer command
+
+```json
+"optimizer": {
+  "command": [
+    "bash",
+    "{optimization_root}/run_optimizer.sh",
+    "--from-iteration", "{from_iteration}",
+    "--next-iteration", "{next_iteration}",
+    "--output-dir", "{optimizer_run_dir}/outputs"
+  ],
+  "working_directory": "{optimization_root}",
+  "env_script": "~/apps/env/optimas_sunrise.sh"
+}
+```
+
+The workflow renders placeholders and executes this command when proposing the next iteration. The command must produce the optimizer outputs described in `docs/OPTIMIZATION_MODULE_CONTRACT.md`.
+
+### Campaign preparation
+
+```json
+"campaign_preparation": {
+  "optimizer_runs_dir": "optimizer_runs",
+  "iterations_dir": "iterations",
+  "template_campaign_root": "iterations/iter_000",
+  "campaign_name_template": "{optimization_name}_iter_{next_iteration:03d}",
+  "materialize_after_prepare": true,
+  "init_case_states_after_materialize": true
+}
+```
+
+Defaults:
+
+- `optimizer_runs_dir`: `optimizer_runs`
+- `iterations_dir`: `iterations`
+- `template_campaign_root`: source iteration campaign root
+- `campaign_name_template`: `{optimization_name}_iter_{next_iteration:03d}`
+- `materialize_after_prepare`: `true`
+- `init_case_states_after_materialize`: `true`
+
+### Policy
+
+```json
+"policy": {
+  "max_iterations": 5,
+  "max_total_materialized_cases": 1000,
+  "max_total_submitted_cases": 1000,
+  "max_cases_per_submit": 128,
+  "max_unsubmitted_materialized_cases": 128
+}
+```
+
+Policy keys are guardrails checked before materialization/submission where applicable.
+
+### Guards
+
+```json
+"guards": {
+  "enabled": true,
+  "pause_file": "PAUSE_OPTIMIZATION",
+  "iteration_limits": {
+    "enabled": true,
+    "max_iterations": 5
+  },
+  "storage_quota": {
+    "enabled": true,
+    "mode": "block",
+    "hard_used_fraction": 0.95,
+    "soft_used_fraction": 0.90,
+    "min_free_bytes": 100000000000
+  },
+  "walltime": {
+    "enabled": true,
+    "mode": "warn",
+    "max_runtime_fraction": 0.85,
+    "partition_time_limit_seconds": 21600
   }
 }
 ```
 
-The analysis adapter may call a campaign-specific module, but the workflow core should only care about:
+The exact enabled guard subset is optional. Missing guard sections mean no corresponding guard is enforced.
 
-- inputs
-- outputs
-- exit status
-- validation contract
-
-## Reduced outputs
-
-Reduced outputs are small, persistent scientific products.
-
-Examples:
-```json
-{
-  "outputs": [
-    {
-      "name": "metrics",
-      "kind": "csv",
-      "path": "post/metrics.csv",
-      "min_rows": 1,
-      "required_columns": ["iteration"]
-    }
-  ]
-}
-```
-
-## Cleanup section
-
-Example:
-```json
-{
-  "cleanup": {
-    "raw_delete_globs": ["diags/**/*.h5"],
-    "require_raw_validated": true,
-    "require_reduced_validated": true,
-    "require_delete_manifest": true,
-    "allow_directory_delete": false
-  }
-}
-```
-Hard rules:
-
-- `allow_directory_delete` must remain false in V1
-- cleanup may delete explicit files only
-- cleanup may not delete case directories
-- cleanup may not delete paths outside the case directory
-- cleanup may not follow symlink escapes
-
-## Optional maintenance section
-
-Future versions may support a campaign maintenance section.
-
-This section is not required for V1. If absent, no automatic maintenance tick,
-walltime guard, quota guard, or rerun launcher is enabled.
-
-Example:
+### Stopping
 
 ```json
-{
-  "maintenance": {
-    "enabled": false,
-    "lock_name": "campaign_maintenance",
-    "walltime_guard": {
-      "enabled": false,
-      "safety_margin_minutes": 30,
-      "risk_threshold": "TIMEOUT_RISK",
-      "failure_kind": "walltime_insufficient",
-      "partition_escalation": {
-        "T6H": {
-          "partition": "T12H",
-          "time": "12:00:00"
-        },
-        "T12H": {
-          "partition": "T24H",
-          "time": "24:00:00"
-        }
-      }
-    },
-    "quota_guard": {
-      "enabled": false,
-      "command": ["lfs", "quota", "-h", "-u", "{user}", "{campaign_root}"],
-      "soft_used_fraction": 0.80,
-      "hard_used_fraction": 0.90
-    },
-    "rerun_launcher": {
-      "enabled": false,
-      "max_cases_per_tick": 50,
-      "submit_command_template": [
-        "sbatch",
-        "--partition={partition}",
-        "--time={time}",
-        "--array={array_spec}",
-        "{case_cycle_script}"
-      ]
-    }
-  }
-}
-
-Maintenance configuration must remain generic.
-
-It must not contain capillary physics assumptions. It may contain scheduler policy,
-quota policy, walltime policy, and rerun policy.
-
-## Git reproducibility metadata
-
-Every job should eventually record the workflow commit:
-```json
-{
-  "workflow_git": {
-    "commit": "...",
-    "tag": "...",
-    "dirty": false
+"stopping": {
+  "enabled": true,
+  "mode": "hard",
+  "max_iterations": 5,
+  "hypervolume_plateau": {
+    "enabled": true,
+    "min_delta": 0.001,
+    "objectives": ["score_guiding", "score_beamlike"],
+    "aggregation": "any"
+  },
+  "candidate_novelty": {
+    "enabled": true,
+    "min_median_nearest_known_scaled_dist": 0.05
+  },
+  "manual_review": {
+    "enabled": true,
+    "review_threshold": 0.85,
+    "block": false
+  },
+  "weak_batch": {
+    "enabled": true,
+    "block_on_weak": false
   }
 }
 ```
 
-This is not required for phase 0, but the file formats should leave room for it
-
-
+Only configured stopping criteria are evaluated. A `STOP_OPTIMIZATION` file at the optimization root is also recognized by the optimizer state logic.

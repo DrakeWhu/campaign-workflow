@@ -551,7 +551,7 @@ def prepare_next_campaign_from_optimizer_outputs(
 ) -> dict[str, Any]:
     """Create iterations/iter_XXX from verified optimizer outputs.
 
-    This reuses the Fase 3 batch-campaign preparation logic. It writes campaign
+    This reuses the batch-campaign preparation logic. It writes campaign
     setup files only: campaign.json, cases.tsv, input_template.py, array_logs and
     optimizer_batch_provenance.json. It does not materialize cases and does not
     submit jobs.

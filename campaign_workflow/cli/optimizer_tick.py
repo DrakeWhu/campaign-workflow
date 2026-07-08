@@ -177,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--execute",
         action="store_true",
-        help="Execute the explicit action. In Fase 4B this is limited to exactly one sbatch for submit_iteration.",
+        help=("Execute the explicit action. Depending on --action, this may write optimization_state.json, run the external optimizer command, prepare/materialize the next campaign, or submit SLURM jobs."),
     )
 
     return parser

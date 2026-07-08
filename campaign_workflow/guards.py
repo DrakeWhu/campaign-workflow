@@ -582,7 +582,7 @@ def evaluate_walltime_guard(
         "case_estimates": case_reports,
         "note": (
             "pre-submit walltime is a configurable budget guard. Running-job log-based "
-            "walltime/resubmission decisions are intentionally left for a later phase."
+            "running-job log-based walltime/resubmission decisions are outside this guard."
         ),
     }
 
