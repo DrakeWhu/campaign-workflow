@@ -85,7 +85,7 @@ def evaluate_guards(
 
     # Backward compatibility:
     # If optimization.json has no "guards" section, only the historical pause guard
-    # is active. New guards must not change Phase 4A–4D behavior unless configured.
+    # is active. New guards must not change default optimizer-tick behavior unless configured.
     enabled = bool(guards_config.get("enabled", bool(guards_config)))
 
     ctx = GuardContext(
