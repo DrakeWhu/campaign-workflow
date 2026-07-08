@@ -50,3 +50,4 @@ tmp/
 
 *.zip
 *.tar.gz
+*.patch
