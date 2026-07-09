@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=hex_ei_base
 #SBATCH --partition=novas
-#SBATCH --nodes=1
-#SBATCH --ntasks=24
-#SBATCH --mem=64G
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=24
+#SBATCH --mem=120G
 #SBATCH --time=12:00:00
 #SBATCH --hint=nomultithread
 #SBATCH --output=hex_ei_base_%j.out
