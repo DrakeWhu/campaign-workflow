@@ -180,7 +180,7 @@ solver = picmi.ElectromagneticSolver(
 # LFMetrics v0.1 reads electrons from this openPMD/HDF5 output.
 particle_diag = picmi.ParticleDiagnostic(
     name="diag1",
-    period=100,
+    period=max_steps,
     write_dir=".",
     warpx_file_prefix="3D",
     warpx_format="openpmd",
@@ -192,7 +192,7 @@ particle_diag = picmi.ParticleDiagnostic(
 field_diag = picmi.FieldDiagnostic(
     name="diag_fields",
     grid=grid,
-    period=400,
+    period=max_steps,
     data_list=["B", "E", "rho"],
     write_dir=".",
     warpx_file_prefix="fields3D",
