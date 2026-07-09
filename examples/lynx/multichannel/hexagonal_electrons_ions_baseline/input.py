@@ -231,8 +231,8 @@ sim.add_laser(laser, injection_method=laser_antenna)
 sim.add_diagnostic(particle_diag)
 sim.add_diagnostic(field_diag)
 
+# Keep a generated inputs file for auditing/debugging if PICMI supports it.
 sim.write_input_file(file_name="inputs_3d_picmi")
 
-sim.initialize_inputs()
-sim.initialize_warpx()
+# Run WarpX through the normal PICMI Python path.
 sim.step(max_steps)
