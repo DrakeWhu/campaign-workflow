@@ -185,10 +185,6 @@ particle_diag = picmi.ParticleDiagnostic(
     warpx_file_prefix="3D",
     warpx_format="openpmd",
     warpx_openpmd_backend="h5",
-    warpx_uniform_stride={
-        "electrons": 1,
-        "carbon_ions": 100,
-    },
 )
 
 # Sparse field diagnostic for physical auditing.
