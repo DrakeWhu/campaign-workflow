@@ -2,9 +2,8 @@
 #SBATCH --job-name=hex_ei_base
 #SBATCH --partition=novas
 #SBATCH --nodes=2
-#SBATCH --ntasks-per-node=24
-#SBATCH --mem=120G
-#SBATCH --time=12:00:00
+#SBATCH --ntasks-per-node=48
+#SBATCH --mem=110G
 #SBATCH --hint=nomultithread
 #SBATCH --output=hex_ei_base_%j.out
 #SBATCH --error=hex_ei_base_%j.err
