@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=hex_ei_base
 #SBATCH --partition=novas
-#SBATCH --nodes=2
-#SBATCH --ntasks=48
-#SBATCH --mem=100G
-#SBATCH --time=12:00:00
-#SBATCH --hint=nomultithread
+#SBATCH --nodes=1
+#SBATCH --ntasks=32
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=48G
 #SBATCH --output=hex_ei_base_%j.out
 #SBATCH --error=hex_ei_base_%j.err
 
@@ -64,7 +63,14 @@ cd "$RUN_DIR"
 python -m py_compile input.py
 
 echo "[hex_ei_base] starting WarpX at $(date -Is)"
-srun --overlap --ntasks="$SLURM_NTASKS" python input.py
+NP="${SLURM_NTASKS:-32}"
+PY_EXE="$(command -v python)"
+
+echo "[hex_ei_base] python=$PY_EXE"
+echo "[hex_ei_base] mpirun=$(command -v mpirun)"
+echo "[hex_ei_base] NP=$NP"
+
+mpirun -np "$NP" "$PY_EXE" -u input.py
 echo "[hex_ei_base] WarpX finished at $(date -Is)"
 
 cat > "$RUN_DIR/post/sim_done.json" <<EOF_DONE
