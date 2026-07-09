@@ -11,11 +11,23 @@
 
 set -Eeuo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INPUT_SRC="$SCRIPT_DIR/hexagonal_electrons_ions_baseline/input.py"
+# Resolve repository path robustly under sbatch.
+# Do not rely on BASH_SOURCE[0], because SLURM may execute a spool copy of
+# the submit script under /var/spool/slurm.
+DEFAULT_REPO="$HOME/apps/src/campaign-workflow"
+REPO_DIR="${CAMPAIGN_WORKFLOW_REPO:-$DEFAULT_REPO}"
+
+# If submitted from a checkout, prefer that checkout.
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]] && [[ -f "$SLURM_SUBMIT_DIR/examples/lynx/multichannel/hexagonal_electrons_ions_baseline/input.py" ]]; then
+    REPO_DIR="$SLURM_SUBMIT_DIR"
+fi
+
+INPUT_SRC="$REPO_DIR/examples/lynx/multichannel/hexagonal_electrons_ions_baseline/input.py"
 
 if [[ ! -f "$INPUT_SRC" ]]; then
     echo "[hex_ei_base] missing input: $INPUT_SRC" >&2
+    echo "[hex_ei_base] REPO_DIR=$REPO_DIR" >&2
+    echo "[hex_ei_base] SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-}" >&2
     exit 2
 fi
 
