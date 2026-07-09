@@ -64,7 +64,7 @@ cd "$RUN_DIR"
 python -m py_compile input.py
 
 echo "[hex_ei_base] starting WarpX at $(date -Is)"
-srun --nodes="$SLURM_JOB_NUM_NODES" --ntasks="$SLURM_NTASKS" python input.py
+srun --overlap --ntasks="$SLURM_NTASKS" python input.py
 echo "[hex_ei_base] WarpX finished at $(date -Is)"
 
 cat > "$RUN_DIR/post/sim_done.json" <<EOF_DONE
