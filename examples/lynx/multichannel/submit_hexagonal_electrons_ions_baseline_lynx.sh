@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=hex_ei_base
+#SBATCH --partition=novas
+#SBATCH --nodes=1
+#SBATCH --ntasks=24
+#SBATCH --mem=64G
+#SBATCH --time=12:00:00
+#SBATCH --hint=nomultithread
+#SBATCH --output=hex_ei_base_%j.out
+#SBATCH --error=hex_ei_base_%j.err
+
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INPUT_SRC="$SCRIPT_DIR/hexagonal_electrons_ions_baseline/input.py"
+
+if [[ ! -f "$INPUT_SRC" ]]; then
+    echo "[hex_ei_base] missing input: $INPUT_SRC" >&2
+    exit 2
+fi
+
+source "$HOME/apps/env/lynx_clean_base.sh"
+
+module load WarpX/26.03_lynx_cpu_3d_yee_openpmd_py311
+
+export OMP_NUM_THREADS=1
+export PYTHONNOUSERSITE=1
+
+RUN_ROOT="${RUN_ROOT:-$HOME/warpx_runs/multichannel}"
+RUN_DIR="$RUN_ROOT/hexagonal_electrons_ions_baseline_${SLURM_JOB_ID}"
+
+mkdir -p "$RUN_DIR/post"
+cp "$INPUT_SRC" "$RUN_DIR/input.py"
+
+{
+    echo "job_id=$SLURM_JOB_ID"
+    echo "host=$(hostname)"
+    echo "date_start=$(date -Is)"
+    echo "run_dir=$RUN_DIR"
+    echo "input_src=$INPUT_SRC"
+    echo "partition=${SLURM_JOB_PARTITION:-}"
+    echo "ntasks=${SLURM_NTASKS:-}"
+    echo "warpx_module=WarpX/26.03_lynx_cpu_3d_yee_openpmd_py311"
+} | tee "$RUN_DIR/post/context.txt"
+
+cd "$RUN_DIR"
+
+python -m py_compile input.py
+
+echo "[hex_ei_base] starting WarpX at $(date -Is)"
+srun -n "$SLURM_NTASKS" python input.py
+echo "[hex_ei_base] WarpX finished at $(date -Is)"
+
+cat > "$RUN_DIR/post/sim_done.json" <<EOF_DONE
+{
+  "status": "done",
+  "job_id": "${SLURM_JOB_ID}",
+  "date_done": "$(date -Is)",
+  "run_dir": "${RUN_DIR}"
+}
+EOF_DONE
+
+echo "[hex_ei_base] running LFMetrics"
+source "$HOME/apps/env/multichannel_lfmetrics_lynx.sh"
+
+lfmetrics analyze-case \
+    "$RUN_DIR" \
+    --diagnostics-dir "3D" \
+    --species electrons \
+    --energy-threshold-MeV 5 \
+    --output "$RUN_DIR/post/particle_summary.csv"
+
+echo "[hex_ei_base] LFMetrics output:"
+cat "$RUN_DIR/post/particle_summary.csv"
+
+echo "[hex_ei_base] complete: $RUN_DIR"
