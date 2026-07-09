@@ -2,8 +2,9 @@
 #SBATCH --job-name=hex_ei_base
 #SBATCH --partition=novas
 #SBATCH --nodes=2
-#SBATCH --ntasks-per-node=48
-#SBATCH --mem=110G
+#SBATCH --ntasks=48
+#SBATCH --mem=100G
+#SBATCH --time=12:00:00
 #SBATCH --hint=nomultithread
 #SBATCH --output=hex_ei_base_%j.out
 #SBATCH --error=hex_ei_base_%j.err
@@ -45,13 +46,17 @@ cp "$INPUT_SRC" "$RUN_DIR/input.py"
 
 {
     echo "job_id=$SLURM_JOB_ID"
-    echo "host=$(hostname)"
+    echo "host=$(/usr/bin/hostname 2>/dev/null || echo unknown)"
     echo "date_start=$(date -Is)"
     echo "run_dir=$RUN_DIR"
     echo "input_src=$INPUT_SRC"
     echo "partition=${SLURM_JOB_PARTITION:-}"
     echo "ntasks=${SLURM_NTASKS:-}"
     echo "warpx_module=WarpX/26.03_lynx_cpu_3d_yee_openpmd_py311"
+    echo "nodes=${SLURM_JOB_NUM_NODES:-}"
+    echo "ntasks_per_node=${SLURM_NTASKS_PER_NODE:-}"
+    echo "cpus_on_node=${SLURM_CPUS_ON_NODE:-}"
+    echo "omp_num_threads=${OMP_NUM_THREADS:-}"
 } | tee "$RUN_DIR/post/context.txt"
 
 cd "$RUN_DIR"
@@ -59,7 +64,7 @@ cd "$RUN_DIR"
 python -m py_compile input.py
 
 echo "[hex_ei_base] starting WarpX at $(date -Is)"
-srun -n "$SLURM_NTASKS" python input.py
+srun --nodes="$SLURM_JOB_NUM_NODES" --ntasks="$SLURM_NTASKS" python input.py
 echo "[hex_ei_base] WarpX finished at $(date -Is)"
 
 cat > "$RUN_DIR/post/sim_done.json" <<EOF_DONE
