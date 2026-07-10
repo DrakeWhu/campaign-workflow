@@ -92,6 +92,23 @@ lfmetrics analyze-case \
     --energy-threshold-MeV 5 \
     --output "$RUN_DIR/post/particle_summary.csv"
 
+PLOTS_DIR="$RUN_DIR/post/plots/electrons"
+for PLOT_NAME in \
+    energy_spectrum.png \
+    longitudinal_phase_space_z_pz.png \
+    longitudinal_energy_space_z_energy.png \
+    transverse_phase_space_x_thetax.png \
+    transverse_phase_space_y_thetay.png \
+    transverse_real_space_xy.png \
+    transverse_divergence_thetax_thetay.png
+do
+    PLOT_PATH="$PLOTS_DIR/$PLOT_NAME"
+    if [[ ! -s "$PLOT_PATH" ]]; then
+        echo "[hex_ei_base] missing or empty LFMetrics plot: $PLOT_PATH" >&2
+        exit 2
+    fi
+done
+
 echo "[hex_ei_base] LFMetrics output:"
 cat "$RUN_DIR/post/particle_summary.csv"
 

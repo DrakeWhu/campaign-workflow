@@ -37,3 +37,18 @@ Expected analysis output:
 
 ```text
 post/particle_summary.csv
+```
+LFMetrics command used by the SLURM script:
+```
+lfmetrics analyze-case "$RUN_DIR" \
+  --diagnostics-dir 3D \git push
+  --species electrons \
+  --energy-threshold-MeV 5 \
+  --output "$RUN_DIR/post/particle_summary.csv"
+```
+Future questions:
+
+- compare pre-ionized electrons vs `ionized_electrons`
+- reintroduce ADK field ionization explicitly
+- compare plasma electron beam vs injected beam
+- add objective scoring for MORBO

@@ -1,4 +1,4 @@
-﻿# Default: keep text normalized as LF in the repository.
+﻿# Default: Text normalized as LF in the repository.
 * text=auto eol=lf
 
 # Python / shell / config files must stay LF for Linux/HPC execution.
