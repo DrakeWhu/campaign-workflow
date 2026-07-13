@@ -2,7 +2,10 @@
 
 `candidate_batch.tsv` is the reviewed optimizer output consumed by `campaign-workflow` to prepare a new campaign root.
 
-The current `1.0.0` validator is intentionally capillary-campaign-specific because it is the proven production path. Generalizing this schema belongs to a later minor version.
+The capillary schema remains the default and preserves the proven production
+path. A batch plan can opt into a problem-specific schema by carrying a
+versioned `candidate_batch_contract`; this is used by the 3D multichannel
+example without weakening the legacy checks.
 
 ## File format
 
@@ -74,6 +77,29 @@ CAP_NR
 ```
 
 `CAP_NR` must be integer-like.
+
+## Contract-driven batches
+
+If `batch_campaign_plan.json` contains `candidate_batch_contract`, the workflow
+uses that contract instead of the capillary-specific columns above. Schema
+version 1 supports:
+
+```json
+{
+  "schema_version": 1,
+  "required_columns": ["CASE_ID", "CASE_NAME", "PARAMETER_A"],
+  "numeric_columns": ["PARAMETER_A"],
+  "integer_columns": ["CASE_ID"],
+  "choices": {"MODE": ["a", "b"]},
+  "bounds": {"PARAMETER_A": [0.0, 1.0]},
+  "summary_columns": ["MODE"]
+}
+```
+
+`CASE_ID` and `CASE_NAME` are always required. Their uniqueness and path-safety
+checks cannot be disabled by a custom contract. All declared numeric values
+must be finite decimals, integer values must be integer-like, and bounds are
+inclusive.
 
 ## Example
 

@@ -44,10 +44,16 @@ class ChainArgs:
     nodes: int
     ntasks: int
     mem: str
+    tick_partition: str
+    tick_time: str
+    tick_nodes: int
+    tick_ntasks: int
+    tick_mem: str
     execute: bool
     optimization_config: Path | None
     array_script: Path
     tick_script: Path
+    case_runner: Path | None
 
     @property
     def final_iteration(self) -> int:
@@ -73,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nodes", type=int, default=1)
     parser.add_argument("--ntasks", type=int, default=24)
     parser.add_argument("--mem", default="64G")
+    parser.add_argument("--tick-partition", default=None)
+    parser.add_argument("--tick-time", default=None)
+    parser.add_argument("--tick-nodes", type=int, default=None)
+    parser.add_argument("--tick-ntasks", type=int, default=None)
+    parser.add_argument("--tick-mem", default=None)
     parser.add_argument("--optimization-config", type=Path, default=None)
     parser.add_argument(
         "--array-script",
@@ -90,6 +101,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Override static optimizer tick sbatch script. Defaults to "
             "examples/sunrise/run_optimizer_tick_materialize_only.sh under workflow root."
+        ),
+    )
+    parser.add_argument(
+        "--case-runner",
+        type=Path,
+        default=None,
+        help=(
+            "Case-local simulation runner exported to every iteration array. "
+            "When omitted, the case-cycle default is used."
         ),
     )
     parser.add_argument(
@@ -122,6 +142,11 @@ def resolve_args(raw: argparse.Namespace) -> ChainArgs:
         / "sunrise"
         / "run_optimizer_tick_materialize_only.sh"
     )
+    case_runner = (
+        raw.case_runner.expanduser().resolve(strict=False)
+        if raw.case_runner is not None
+        else None
+    )
 
     args = ChainArgs(
         optimization_root=optimization_root,
@@ -136,10 +161,16 @@ def resolve_args(raw: argparse.Namespace) -> ChainArgs:
         nodes=int(raw.nodes),
         ntasks=int(raw.ntasks),
         mem=str(raw.mem),
+        tick_partition=str(raw.tick_partition or raw.partition),
+        tick_time=str(raw.tick_time or raw.time),
+        tick_nodes=int(raw.tick_nodes or raw.nodes),
+        tick_ntasks=int(raw.tick_ntasks or raw.ntasks),
+        tick_mem=str(raw.tick_mem or raw.mem),
         execute=bool(raw.execute),
         optimization_config=optimization_config,
         array_script=array_script,
         tick_script=tick_script,
+        case_runner=case_runner,
     )
     validate_chain_args(args)
     return args
@@ -156,6 +187,10 @@ def validate_chain_args(args: ChainArgs) -> None:
         raise MorboChainSubmitError("--nodes must be >= 1")
     if args.ntasks < 1:
         raise MorboChainSubmitError("--ntasks must be >= 1")
+    if args.tick_nodes < 1:
+        raise MorboChainSubmitError("--tick-nodes must be >= 1")
+    if args.tick_ntasks < 1:
+        raise MorboChainSubmitError("--tick-ntasks must be >= 1")
     if not args.optimization_root.is_dir():
         raise MorboChainSubmitError(
             f"optimization root does not exist: {args.optimization_root}"
@@ -177,6 +212,10 @@ def validate_chain_args(args: ChainArgs) -> None:
     if not args.tick_script.is_file():
         raise MorboChainSubmitError(
             f"tick sbatch script does not exist: {args.tick_script}"
+        )
+    if args.case_runner is not None and not args.case_runner.is_file():
+        raise MorboChainSubmitError(
+            f"case runner does not exist: {args.case_runner}"
         )
     if args.optimization_config is not None and not args.optimization_config.is_file():
         raise MorboChainSubmitError(
@@ -234,7 +273,7 @@ def build_array_sbatch_command(
 ) -> list[str]:
     job_name = f"{args.job_name_prefix}_A{iteration:03d}"
     loop_logs = args.optimization_root / "loop_logs"
-    command = common_sbatch_prefix(args=args, job_name=job_name)
+    command = common_sbatch_prefix(args=args, job_name=job_name, job_kind="array")
     command.extend(
         [
             f"--array={args.array_spec}",
@@ -244,18 +283,20 @@ def build_array_sbatch_command(
     )
     if dependency:
         command.append(f"--dependency={dependency}")
+    export_values: dict[str, object] = {
+        "CW_OPTIMIZATION_ROOT": args.optimization_root,
+        "CW_ITERATION": iteration,
+        "CW_WORKFLOW_ROOT": args.workflow_root,
+        "CW_WORKFLOW_ENV": args.workflow_env,
+        "CW_JOB_NAME_PREFIX": args.job_name_prefix,
+        "CONFIRM_CLEANUP_EXECUTE": "1",
+    }
+    if args.case_runner is not None:
+        export_values["CW_CASE_RUNNER"] = args.case_runner
+
     command.extend(
         [
-            export_arg(
-                {
-                    "CW_OPTIMIZATION_ROOT": args.optimization_root,
-                    "CW_ITERATION": iteration,
-                    "CW_WORKFLOW_ROOT": args.workflow_root,
-                    "CW_WORKFLOW_ENV": args.workflow_env,
-                    "CW_JOB_NAME_PREFIX": args.job_name_prefix,
-                    "CONFIRM_CLEANUP_EXECUTE": "1",
-                }
-            ),
+            export_arg(export_values),
             str(args.array_script),
         ]
     )
@@ -279,7 +320,7 @@ def build_tick_sbatch_command(
     if args.optimization_config is not None:
         export_values["CW_OPTIMIZATION_CONFIG"] = args.optimization_config
 
-    command = common_sbatch_prefix(args=args, job_name=job_name)
+    command = common_sbatch_prefix(args=args, job_name=job_name, job_kind="tick")
     command.extend(
         [
             f"--dependency={dependency}",
@@ -292,15 +333,32 @@ def build_tick_sbatch_command(
     return command
 
 
-def common_sbatch_prefix(*, args: ChainArgs, job_name: str) -> list[str]:
+def common_sbatch_prefix(
+    *, args: ChainArgs, job_name: str, job_kind: str = "array"
+) -> list[str]:
+    if job_kind == "array":
+        partition = args.partition
+        time = args.time
+        nodes = args.nodes
+        ntasks = args.ntasks
+        mem = args.mem
+    elif job_kind == "tick":
+        partition = args.tick_partition
+        time = args.tick_time
+        nodes = args.tick_nodes
+        ntasks = args.tick_ntasks
+        mem = args.tick_mem
+    else:
+        raise ValueError(f"unsupported sbatch job kind: {job_kind!r}")
+
     return [
         "sbatch",
         "--parsable",
-        f"--partition={args.partition}",
-        f"--time={args.time}",
-        f"--nodes={args.nodes}",
-        f"--ntasks={args.ntasks}",
-        f"--mem={args.mem}",
+        f"--partition={partition}",
+        f"--time={time}",
+        f"--nodes={nodes}",
+        f"--ntasks={ntasks}",
+        f"--mem={mem}",
         f"--job-name={job_name}",
     ]
 
@@ -451,8 +509,18 @@ def build_manifest(
         "nodes": args.nodes,
         "ntasks": args.ntasks,
         "mem": args.mem,
+        "tick_resources": {
+            "partition": args.tick_partition,
+            "time": args.tick_time,
+            "nodes": args.tick_nodes,
+            "ntasks": args.tick_ntasks,
+            "mem": args.tick_mem,
+        },
         "array_script": str(args.array_script),
         "tick_script": str(args.tick_script),
+        "case_runner": (
+            str(args.case_runner) if args.case_runner is not None else None
+        ),
         "optimization_config": (
             str(args.optimization_config)
             if args.optimization_config is not None

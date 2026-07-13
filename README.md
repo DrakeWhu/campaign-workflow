@@ -167,6 +167,15 @@ See:
 
 The current materialization defaults are still the capillary `CAP_*` environment mapping used by the production campaign. This is intentionally preserved for `1.0.0`. A later `1.1` cleanup can move those defaults into explicit campaign configuration without changing the proven runtime behavior.
 
+## 3D multichannel example
+
+`examples/sunrise/multichannel/` contains the complete SUNRISE setup for a
+finite honeycomb target: final-frame-only WarpX diagnostics, LFMetrics beam
+reduction, manifest-driven raw cleanup, a small Sobol initial design and the
+transition to MORBO-like proposals. Its README includes the serial PICMI 26.05
+preflight and reference-pilot commands; no submission is performed by the
+bootstrap commands.
+
 ## Tests
 
 Run the permanent local suite with `unittest`:

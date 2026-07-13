@@ -122,6 +122,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional SLURM job name. Defaults to cw_iter_XXX_cycle.",
     )
     parser.add_argument(
+        "--case-runner",
+        type=Path,
+        default=None,
+        help=(
+            "Optional case-local simulation runner exported as CASE_RUNNER "
+            "for submit_iteration."
+        ),
+    )
+    parser.add_argument(
+        "--allow-additional-cases",
+        action="store_true",
+        help=(
+            "Allow submit_iteration to add a disjoint array to an iteration "
+            "that already has submitted cases. Overlapping case IDs are rejected."
+        ),
+    )
+    parser.add_argument(
+        "--confirm-cleanup-execute",
+        action="store_true",
+        help=(
+            "Export CONFIRM_CLEANUP_EXECUTE=1 for submit_iteration so the "
+            "case cycle performs its manifest-validated cleanup execute phase."
+        ),
+    )
+    parser.add_argument(
         "--job-name-prefix",
         default=None,
         help=(
@@ -269,6 +294,21 @@ def main(argv: list[str] | None = None) -> int:
                     summary["state_written"] = False
 
             elif args.action == "submit_iteration":
+                state_info = read_optimization_state(optimization_root)
+                submit_state_doc = (
+                    state_info.data
+                    if state_info.data is not None
+                    else summary["proposed_optimization_state"]
+                )
+                existing_iteration_state = next(
+                    (
+                        item
+                        for item in submit_state_doc.get("iterations", [])
+                        if isinstance(item, dict)
+                        and int(item.get("iteration", -1)) == int(args.iteration)
+                    ),
+                    {},
+                )
                 report = evaluate_guards(
                     optimization_root=optimization_root,
                     tick_summary=summary,
@@ -310,6 +350,10 @@ def main(argv: list[str] | None = None) -> int:
                         workflow_root=args.workflow_root,
                         workflow_env=args.workflow_env,
                         job_name=args.job_name,
+                        case_runner=args.case_runner,
+                        allow_additional_cases=args.allow_additional_cases,
+                        existing_iteration_state=existing_iteration_state,
+                        confirm_cleanup_execute=args.confirm_cleanup_execute,
                     )
 
                     summary["action"] = "submit_iteration"
@@ -319,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
                     if args.execute:
                         result = execute_submit_iteration(plan)
                         new_state = update_state_after_submit(
-                            state_doc=summary["proposed_optimization_state"],
+                            state_doc=submit_state_doc,
                             plan=plan,
                             result=result,
                         )
@@ -632,6 +676,7 @@ def _validate_args(args: argparse.Namespace) -> str | None:
         args.workflow_env,
         args.job_name,
         args.job_name_prefix,
+        args.case_runner,
     ]
     propose_args = [
         args.from_iteration,
@@ -680,6 +725,15 @@ def _validate_args(args: argparse.Namespace) -> str | None:
             return "--action submit_iteration supports only --dry-run or --execute"
         if args.array_spec is not None and args.max_cases is not None:
             return "--array-spec and --max-cases are mutually exclusive"
+
+    if args.allow_additional_cases and args.action != "submit_iteration":
+        return "--allow-additional-cases requires --action submit_iteration"
+
+    if args.case_runner is not None and args.action != "submit_iteration":
+        return "--case-runner requires --action submit_iteration"
+
+    if args.confirm_cleanup_execute and args.action != "submit_iteration":
+        return "--confirm-cleanup-execute requires --action submit_iteration"
 
     if args.action == "reconcile_iteration":
         if args.iteration is None:

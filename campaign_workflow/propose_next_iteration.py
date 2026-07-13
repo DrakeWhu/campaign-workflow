@@ -333,6 +333,11 @@ def evaluate_from_iteration_readiness(
         from_state.get("n_sim_failed"),
         default=0,
     )
+    materialized = _positive_int(
+        from_state.get("n_cases"),
+        from_summary.get("n_cases"),
+        default=0,
+    )
 
     denominator = max(submitted, 1)
     valid_fraction = valid / denominator
@@ -345,11 +350,26 @@ def evaluate_from_iteration_readiness(
     base = {
         "status": status,
         "submitted_case_count": submitted,
+        "materialized_case_count": materialized,
         "valid_count": valid,
         "failed_count": failed,
         "valid_fraction": valid_fraction,
         "failed_fraction": failed_fraction,
     }
+
+    if (
+        bool(policy.get("require_all_materialized_cases_submitted", False))
+        and submitted < materialized
+    ):
+        return {
+            **base,
+            "ok": False,
+            "reason": (
+                "not all materialized cases were submitted: "
+                f"submitted={submitted}, materialized={materialized}"
+            ),
+            "recommended_action": "submit_iteration",
+        }
 
     if failed_fraction > max_failed:
         return {

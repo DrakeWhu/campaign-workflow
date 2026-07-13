@@ -114,6 +114,40 @@ class SunriseMorboChainTests(unittest.TestCase):
         self.assertEqual(data["jobs"][1]["dependency"], "afterok:A_002")
         self.assertEqual(data["jobs"][2]["dependency"], "afterok:T_002")
 
+    def test_custom_case_runner_and_lightweight_tick_resources_are_propagated(
+        self,
+    ) -> None:
+        tmp, root, workflow_env = self._make_root()
+        self.addCleanup(tmp.cleanup)
+        case_runner = Path(tmp.name) / "run_multichannel.sh"
+        case_runner.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        case_runner.chmod(0o755)
+        stdout = io.StringIO()
+
+        argv = self._base_argv(root, workflow_env) + [
+            "--case-runner",
+            str(case_runner),
+            "--tick-time",
+            "00:30:00",
+            "--tick-ntasks",
+            "1",
+            "--tick-mem",
+            "8G",
+        ]
+        with patch.dict(os.environ, {}, clear=True):
+            with contextlib.redirect_stdout(stdout):
+                rc = self.module.main(argv)
+
+        self.assertEqual(rc, 0)
+        data = json.loads(stdout.getvalue())
+        array_command = data["jobs"][0]["submit_command"]
+        tick_command = data["jobs"][1]["submit_command"]
+        self.assertIn(f"CW_CASE_RUNNER={case_runner}", " ".join(array_command))
+        self.assertIn("--time=00:30:00", tick_command)
+        self.assertIn("--ntasks=1", tick_command)
+        self.assertIn("--mem=8G", tick_command)
+        self.assertIn("--ntasks=24", array_command)
+
     def test_execute_submits_chain_with_afterok_dependencies_and_manifest(self) -> None:
         tmp, root, workflow_env = self._make_root()
         self.addCleanup(tmp.cleanup)
@@ -207,6 +241,29 @@ class SunriseMorboChainTests(unittest.TestCase):
     def test_execute_records_start_iteration_submit_metadata(self) -> None:
         tmp, root, workflow_env = self._make_root()
         self.addCleanup(tmp.cleanup)
+
+        campaign_root = root / "iterations" / "iter_002"
+        campaign_root.mkdir(parents=True)
+        (campaign_root / "campaign.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "campaign_name": "bo_root_iter_002",
+                    "case_manifest": "cases.tsv",
+                    "case_manifest_format": "tsv",
+                    "case_id_column": "CASE_ID",
+                    "case_name_column": "CASE_NAME",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (campaign_root / "cases.tsv").write_text(
+            "CASE_ID\tCASE_NAME\n"
+            + "".join(
+                f"{case_id}\tcase_{case_id:03d}\n" for case_id in range(30)
+            ),
+            encoding="utf-8",
+        )
 
         state_path = root / "optimization_state.json"
         state_path.write_text(

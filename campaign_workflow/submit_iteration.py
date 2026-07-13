@@ -35,6 +35,19 @@ class SubmitIterationPlan:
     working_directory: Path
     submit_command: list[str]
     submitted_case_count: int
+    case_runner: Path | None = None
+    additional_submission: bool = False
+    previous_submitted_case_ids: tuple[int, ...] = ()
+    confirm_cleanup_execute: bool = False
+
+    @property
+    def cumulative_submitted_case_ids(self) -> list[int]:
+        return sorted(
+            {
+                *self.previous_submitted_case_ids,
+                *self.submitted_case_ids,
+            }
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +64,20 @@ class SubmitIterationPlan:
             "working_directory": str(self.working_directory),
             "submit_command": self.submit_command,
             "submit_log": None,
+            "case_runner": (
+                None if self.case_runner is None else str(self.case_runner)
+            ),
+            "additional_submission": self.additional_submission,
+            "previous_submitted_case_ids": list(
+                self.previous_submitted_case_ids
+            ),
+            "cumulative_submitted_case_ids": (
+                self.cumulative_submitted_case_ids
+            ),
+            "cumulative_submitted_case_count": len(
+                self.cumulative_submitted_case_ids
+            ),
+            "confirm_cleanup_execute": self.confirm_cleanup_execute,
         }
 
 
@@ -83,6 +110,10 @@ def build_submit_iteration_plan(
     workflow_root: Path | None = None,
     workflow_env: Path | None = None,
     job_name: str | None = None,
+    case_runner: Path | None = None,
+    allow_additional_cases: bool = False,
+    existing_iteration_state: dict[str, Any] | None = None,
+    confirm_cleanup_execute: bool = False,
 ) -> SubmitIterationPlan:
     optimization_root = optimization_root.resolve()
 
@@ -97,11 +128,30 @@ def build_submit_iteration_plan(
     if errors:
         raise SubmitIterationError(f"iteration audit has errors: {errors}")
 
-    if bool(iteration_summary.get("submitted")):
+    existing_iteration_state = dict(existing_iteration_state or {})
+    raw_previous_case_ids = existing_iteration_state.get(
+        "submitted_case_ids", []
+    )
+    if not isinstance(raw_previous_case_ids, list):
+        raise SubmitIterationError(
+            "existing submitted_case_ids must be a list"
+        )
+    try:
+        previous_case_ids = sorted(
+            {int(case_id) for case_id in raw_previous_case_ids}
+        )
+    except (TypeError, ValueError) as exc:
+        raise SubmitIterationError(
+            f"invalid existing submitted_case_ids: {raw_previous_case_ids!r}"
+        ) from exc
+
+    already_submitted = bool(iteration_summary.get("submitted"))
+    additional_submission = already_submitted or bool(previous_case_ids)
+    if additional_submission and not allow_additional_cases:
         raise SubmitIterationError(f"iteration already submitted: iter_{iteration:03d}")
 
     status = str(iteration_summary.get("status", ""))
-    if status in {
+    if not additional_submission and status in {
         "submitted",
         "running",
         "postprocessing",
@@ -114,9 +164,18 @@ def build_submit_iteration_plan(
         )
 
     recommended_action = str(iteration_summary.get("recommended_action", ""))
-    if recommended_action != "submit_iteration":
+    if not additional_submission and recommended_action != "submit_iteration":
         raise SubmitIterationError(
             f"iteration is not ready for submit: recommended_action={recommended_action!r}"
+        )
+    if additional_submission and status in {
+        "failed",
+        "reduced_ready",
+        "closed",
+        "paused",
+    }:
+        raise SubmitIterationError(
+            f"iteration is not eligible for additional submit: status={status!r}"
         )
 
     n_cases = int(iteration_summary.get("n_cases", 0))
@@ -161,6 +220,12 @@ def build_submit_iteration_plan(
         raise SubmitIterationError(
             f"array spec references unknown case IDs: {missing_ids}"
         )
+    duplicate_ids = sorted(set(submitted_case_ids) & set(previous_case_ids))
+    if duplicate_ids:
+        raise SubmitIterationError(
+            "additional submit overlaps previously submitted case IDs: "
+            f"{duplicate_ids}"
+        )
 
     if submit_script is None:
         resolved_workflow_root = (
@@ -187,23 +252,38 @@ def build_submit_iteration_plan(
     else:
         resolved_workflow_env = workflow_env.expanduser().resolve()
 
+    resolved_case_runner = (
+        case_runner.expanduser().resolve()
+        if case_runner is not None
+        else None
+    )
+
     if not resolved_submit_script.is_file():
         raise SubmitIterationError(
             f"submit script does not exist: {resolved_submit_script}"
         )
+    if resolved_case_runner is not None and not resolved_case_runner.is_file():
+        raise SubmitIterationError(
+            f"case runner does not exist: {resolved_case_runner}"
+        )
 
     resolved_job_name = job_name or f"cw_iter_{iteration:03d}_cycle"
+    export_values = [
+        f"CAMPAIGN_ROOT={campaign_root}",
+        f"WORKFLOW_ROOT={resolved_workflow_root}",
+        f"WORKFLOW_ENV={resolved_workflow_env}",
+    ]
+    if resolved_case_runner is not None:
+        export_values.append(f"CASE_RUNNER={resolved_case_runner}")
+    if confirm_cleanup_execute:
+        export_values.append("CONFIRM_CLEANUP_EXECUTE=1")
+
     command = [
         "sbatch",
         "--parsable",
         f"--array={chosen_array_spec}",
         f"--job-name={resolved_job_name}",
-        (
-            "--export=ALL,"
-            f"CAMPAIGN_ROOT={campaign_root},"
-            f"WORKFLOW_ROOT={resolved_workflow_root},"
-            f"WORKFLOW_ENV={resolved_workflow_env}"
-        ),
+        "--export=ALL," + ",".join(export_values),
         str(resolved_submit_script),
     ]
 
@@ -220,6 +300,10 @@ def build_submit_iteration_plan(
         working_directory=campaign_root,
         submit_command=command,
         submitted_case_count=len(submitted_case_ids),
+        case_runner=resolved_case_runner,
+        additional_submission=additional_submission,
+        previous_submitted_case_ids=tuple(previous_case_ids),
+        confirm_cleanup_execute=bool(confirm_cleanup_execute),
     )
 
 
@@ -276,6 +360,33 @@ def update_state_after_submit(
             found = True
             job_ids = list(item.get("slurm_job_ids", []))
             job_ids.append(result.job_id)
+            cumulative_case_ids = plan.cumulative_submitted_case_ids
+            array_specs = list(item.get("array_specs", []))
+            if not array_specs and item.get("array_spec"):
+                array_specs.append(str(item["array_spec"]))
+            array_specs.append(plan.array_spec)
+            submit_commands = list(item.get("submit_commands", []))
+            if not submit_commands and item.get("submit_command"):
+                submit_commands.append(item["submit_command"])
+            submit_commands.append(plan.submit_command)
+            submission_history = list(item.get("submission_history", []))
+            submission_history.append(
+                {
+                    "job_id": result.job_id,
+                    "submitted_at": result.submitted_at,
+                    "array_spec": plan.array_spec,
+                    "submitted_case_ids": plan.submitted_case_ids,
+                    "submit_command": plan.submit_command,
+                    "case_runner": (
+                        None
+                        if plan.case_runner is None
+                        else str(plan.case_runner)
+                    ),
+                    "confirm_cleanup_execute": (
+                        plan.confirm_cleanup_execute
+                    ),
+                }
+            )
             item.update(
                 {
                     "status": "submitted",
@@ -283,12 +394,25 @@ def update_state_after_submit(
                     "slurm_job_ids": job_ids,
                     "submitted_at": result.submitted_at,
                     "submit_command": plan.submit_command,
-                    "array_spec": plan.array_spec,
-                    "submitted_case_ids": plan.submitted_case_ids,
-                    "submitted_case_count": plan.submitted_case_count,
+                    "array_spec": compact_case_ids_as_array_spec(
+                        cumulative_case_ids
+                    ),
+                    "array_specs": array_specs,
+                    "submitted_case_ids": cumulative_case_ids,
+                    "submitted_case_count": len(cumulative_case_ids),
                     "submit_script": str(plan.submit_script),
                     "working_directory": str(plan.working_directory),
                     "submit_log": None,
+                    "submit_commands": submit_commands,
+                    "submission_history": submission_history,
+                    "case_runner": (
+                        None
+                        if plan.case_runner is None
+                        else str(plan.case_runner)
+                    ),
+                    "confirm_cleanup_execute": (
+                        plan.confirm_cleanup_execute
+                    ),
                 }
             )
         iterations.append(item)
@@ -306,6 +430,7 @@ def update_state_after_submit(
 
 
 def state_updates_preview(plan: SubmitIterationPlan) -> dict[str, Any]:
+    cumulative_case_ids = plan.cumulative_submitted_case_ids
     return {
         "iteration": plan.iteration,
         "status": "submitted",
@@ -313,12 +438,18 @@ def state_updates_preview(plan: SubmitIterationPlan) -> dict[str, Any]:
         "slurm_job_ids": ["<sbatch-job-id>"],
         "submitted_at": "<set after successful sbatch>",
         "submit_command": plan.submit_command,
-        "array_spec": plan.array_spec,
-        "submitted_case_ids": plan.submitted_case_ids,
-        "submitted_case_count": plan.submitted_case_count,
+        "array_spec": compact_case_ids_as_array_spec(cumulative_case_ids),
+        "array_specs": [*(["<existing>"] if plan.additional_submission else []), plan.array_spec],
+        "submitted_case_ids": cumulative_case_ids,
+        "submitted_case_count": len(cumulative_case_ids),
         "submit_script": str(plan.submit_script),
         "working_directory": str(plan.working_directory),
         "submit_log": None,
+        "case_runner": (
+            None if plan.case_runner is None else str(plan.case_runner)
+        ),
+        "additional_submission": plan.additional_submission,
+        "confirm_cleanup_execute": plan.confirm_cleanup_execute,
     }
 
 

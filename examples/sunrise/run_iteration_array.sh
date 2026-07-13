@@ -99,6 +99,14 @@ fi
 export CAMPAIGN_ROOT
 export WORKFLOW_ROOT
 export WORKFLOW_ENV
+if [[ -n "${CW_CASE_RUNNER:-}" ]]; then
+    CASE_RUNNER="$(readlink -f "${CW_CASE_RUNNER}")"
+    if [[ ! -x "${CASE_RUNNER}" ]]; then
+        echo "[MORBO-ARRAY] ERROR: missing/non-executable CW_CASE_RUNNER: ${CASE_RUNNER}" >&2
+        exit 1
+    fi
+    export CASE_RUNNER
+fi
 
 cd "${CAMPAIGN_ROOT}"
 exec bash "${CASE_CYCLE_SCRIPT}"

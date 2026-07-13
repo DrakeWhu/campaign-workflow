@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "campaign_name": "multichannel_honeycomb_3d_template",
+  "description": "WarpX 3D solid-density honeycomb campaign with final-frame LFMetrics analysis.",
+  "case_manifest": "cases.tsv",
+  "case_manifest_format": "tsv",
+  "case_id_column": "CASE_ID",
+  "case_name_column": "CASE_NAME",
+  "simulation": {
+    "backend": "warpx_picmi",
+    "scheduler": "slurm",
+    "input_script": "input.py",
+    "completion_marker": "post/sim_done.json",
+    "failure_marker": "post/sim_failed.json"
+  },
+  "case_materialization": {
+    "input_template": "input_template.py",
+    "input_name": "input.py",
+    "env_name": "case.env",
+    "env_columns": [
+      {
+        "column": "CASE_ID",
+        "env": "MC_CASE_ID",
+        "required": true
+      },
+      {
+        "column": "CASE_NAME",
+        "env": "MC_CASE_NAME",
+        "required": true
+      },
+      {
+        "column": "PLASMA_ION_DENSITY_M3",
+        "env": "MC_PLASMA_ION_DENSITY_M3",
+        "required": true
+      },
+      {
+        "column": "CNT_RADIUS_UM",
+        "env": "MC_CNT_RADIUS_M",
+        "required": true,
+        "scale": "1e-6"
+      },
+      {
+        "column": "CNT_GAP_UM",
+        "env": "MC_CNT_GAP_M",
+        "required": true,
+        "scale": "1e-6"
+      },
+      {
+        "column": "LASER_WAIST_UM",
+        "env": "MC_LASER_WAIST_M",
+        "required": true,
+        "scale": "1e-6"
+      },
+      {
+        "column": "PLASMA_LENGTH_UM",
+        "env": "MC_PLASMA_LENGTH_M",
+        "required": true,
+        "scale": "1e-6"
+      },
+      {
+        "column": "PLASMA_HALF_WIDTH_X_UM",
+        "env": "MC_PLASMA_HALF_WIDTH_X_M",
+        "required": true,
+        "scale": "1e-6"
+      },
+      {
+        "column": "PLASMA_HALF_WIDTH_Y_UM",
+        "env": "MC_PLASMA_HALF_WIDTH_Y_M",
+        "required": true,
+        "scale": "1e-6"
+      },
+      {
+        "column": "FOCUS_OFFSET_FROM_PLASMA_START_UM",
+        "env": "MC_FOCUS_OFFSET_FROM_PLASMA_START_M",
+        "required": true,
+        "scale": "1e-6"
+      },
+      {
+        "column": "HONEYCOMB_ANGLE_DEG",
+        "env": "MC_HONEYCOMB_ANGLE_DEG",
+        "required": true
+      },
+      {
+        "column": "POLARIZATION_ANGLE_DEG",
+        "env": "MC_POLARIZATION_ANGLE_DEG",
+        "required": true
+      },
+      {
+        "column": "ELLIPTICITY_ANGLE_DEG",
+        "env": "MC_ELLIPTICITY_ANGLE_DEG",
+        "required": true
+      },
+      {
+        "column": "WRITE_FIELD_DIAGNOSTIC",
+        "env": "MC_WRITE_FIELD_DIAGNOSTIC",
+        "required": true
+      }
+    ],
+    "env_constants": {
+      "MC_PLASMA_ZMIN_M": "4.0e-5",
+      "MC_LASER_ANTENNA_Z_M": "3.7e-5",
+      "MC_PROFILE_T_PEAK_S": "3.0e-14",
+      "MC_POST_PLASMA_MARGIN_M": "3.0e-5"
+    }
+  },
+  "raw_diagnostics": [
+    {
+      "name": "particles_final_openpmd",
+      "kind": "openpmd_hdf5",
+      "path": "3D",
+      "glob": "3D/*.h5",
+      "allowed_suffixes": [".h5", ".hdf5"],
+      "min_files": 1,
+      "min_age_seconds": 0,
+      "required": true
+    },
+    {
+      "name": "fields_final_openpmd",
+      "kind": "openpmd_hdf5",
+      "path": "fields3D",
+      "glob": "fields3D/*.h5",
+      "allowed_suffixes": [".h5", ".hdf5"],
+      "min_files": 0,
+      "min_age_seconds": 0,
+      "required": false
+    }
+  ],
+  "analysis": {
+    "name": "multichannel_lfmetrics_final_frame",
+    "kind": "command",
+    "adapter": "command",
+    "inputs": ["particles_final_openpmd"],
+    "command": [
+      "bash",
+      "{workflow_root}/examples/sunrise/multichannel/run_multichannel_case_analysis_sunrise.sh",
+      "{case_dir}"
+    ],
+    "outputs": [
+      {
+        "name": "particle_summary",
+        "kind": "csv",
+        "path": "post/particle_summary.csv",
+        "min_rows": 1,
+        "required_columns": [
+          "species",
+          "step",
+          "n_macroparticles_total",
+          "n_macroparticles_selected",
+          "weight_total",
+          "weight_selected",
+          "charge_selected_pC",
+          "energy_threshold_MeV",
+          "energy_mean_MeV",
+          "energy_std_MeV",
+          "energy_median_MeV",
+          "energy_p90_MeV",
+          "energy_p95_MeV",
+          "energy_max_MeV",
+          "pz_mean_MeV_c",
+          "pz_p95_MeV_c",
+          "forward_fraction",
+          "theta_r_rms_mrad",
+          "theta_r_p95_mrad",
+          "emitn_x_um_rad",
+          "emitn_y_um_rad",
+          "emitn_xy_um_rad",
+          "beam_quality_score",
+          "beam_quality_status",
+          "beam_quality_flags"
+        ],
+        "required": true
+      },
+      {
+        "name": "energy_spectrum_plot",
+        "kind": "file",
+        "path": "post/plots/electrons/energy_spectrum.png",
+        "allowed_suffixes": [".png"],
+        "min_bytes": 1,
+        "required": true
+      }
+    ]
+  },
+  "cleanup": {
+    "raw_delete_globs": [
+      "3D/*.h5",
+      "3D/*.hdf5",
+      "fields3D/*.h5",
+      "fields3D/*.hdf5"
+    ],
+    "require_raw_validated": true,
+    "require_reduced_validated": true,
+    "require_delete_manifest": true,
+    "allow_directory_delete": false
+  },
+  "storage": {
+    "snapshot_dir": "snapshots",
+    "reservation_dir": "reservations",
+    "events_dir": "events"
+  },
+  "state": {
+    "state_file": "state.json",
+    "validation_file": "validation.json",
+    "locks_dir": "locks",
+    "manifests_dir": "manifests",
+    "post_dir": "post"
+  }
+}

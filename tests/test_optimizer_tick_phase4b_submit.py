@@ -34,6 +34,9 @@ class OptimizerTickPhase4BSubmitTests(unittest.TestCase):
         self.submit_script = Path(
             "examples/sunrise/submit_case_cycle_array.sh"
         ).resolve()
+        self.case_runner = Path(
+            "examples/sunrise/multichannel/run_warpx_multichannel_case_sunrise.sh"
+        ).resolve()
         self._write_iteration_fixture(n_cases=12)
 
     def tearDown(self) -> None:
@@ -296,6 +299,100 @@ class OptimizerTickPhase4BSubmitTests(unittest.TestCase):
         self.assertEqual(rc, 0, stderr)
         state = read_json(self.root / "optimization_state.json")
         self.assertEqual(state["iterations"][0]["array_spec"], "0-9")
+
+    def test_staged_disjoint_submissions_accumulate_case_and_job_ids(self) -> None:
+        with patch("campaign_workflow.submit_iteration.subprocess.run") as run_mock:
+            run_mock.side_effect = [
+                CompletedProcessStub(returncode=0, stdout="111111\n"),
+                CompletedProcessStub(returncode=0, stdout="222222\n"),
+            ]
+            first_rc, _first_stdout, first_stderr = self._run_cli(
+                "--iteration",
+                "0",
+                "--action",
+                "submit_iteration",
+                "--array-spec",
+                "0",
+                "--case-runner",
+                str(self.case_runner),
+                "--confirm-cleanup-execute",
+                "--execute",
+            )
+            second_rc, second_stdout, second_stderr = self._run_cli(
+                "--iteration",
+                "0",
+                "--action",
+                "submit_iteration",
+                "--array-spec",
+                "1-11%2",
+                "--case-runner",
+                str(self.case_runner),
+                "--allow-additional-cases",
+                "--confirm-cleanup-execute",
+                "--execute",
+            )
+
+        self.assertEqual(first_rc, 0, first_stderr)
+        self.assertEqual(second_rc, 0, second_stderr)
+        self.assertEqual(run_mock.call_count, 2)
+
+        second = json.loads(second_stdout)
+        self.assertTrue(second["submit_plan"]["additional_submission"])
+        self.assertEqual(
+            second["submit_plan"]["previous_submitted_case_ids"], [0]
+        )
+        self.assertEqual(
+            second["submit_plan"]["cumulative_submitted_case_ids"],
+            list(range(12)),
+        )
+
+        state = read_json(self.root / "optimization_state.json")
+        iteration = state["iterations"][0]
+        self.assertEqual(iteration["slurm_job_ids"], ["111111", "222222"])
+        self.assertEqual(iteration["array_specs"], ["0", "1-11%2"])
+        self.assertEqual(iteration["array_spec"], "0-11")
+        self.assertEqual(iteration["submitted_case_ids"], list(range(12)))
+        self.assertEqual(iteration["submitted_case_count"], 12)
+        self.assertEqual(len(iteration["submission_history"]), 2)
+        self.assertEqual(iteration["case_runner"], str(self.case_runner))
+        self.assertIn(
+            f"CASE_RUNNER={self.case_runner}",
+            " ".join(run_mock.call_args.args[0]),
+        )
+        self.assertIn(
+            "CONFIRM_CLEANUP_EXECUTE=1",
+            " ".join(run_mock.call_args.args[0]),
+        )
+
+    def test_additional_submission_rejects_previously_submitted_case_ids(self) -> None:
+        with patch("campaign_workflow.submit_iteration.subprocess.run") as run_mock:
+            run_mock.return_value = CompletedProcessStub(
+                returncode=0, stdout="111111\n"
+            )
+            first_rc, _first_stdout, first_stderr = self._run_cli(
+                "--iteration",
+                "0",
+                "--action",
+                "submit_iteration",
+                "--array-spec",
+                "0-2",
+                "--execute",
+            )
+        self.assertEqual(first_rc, 0, first_stderr)
+
+        second_rc, second_stdout, second_stderr = self._run_cli(
+            "--iteration",
+            "0",
+            "--action",
+            "submit_iteration",
+            "--array-spec",
+            "2-4",
+            "--allow-additional-cases",
+            "--dry-run",
+        )
+        self.assertEqual(second_rc, 1)
+        self.assertEqual(second_stdout, "")
+        self.assertIn("overlaps previously submitted", second_stderr)
 
     def test_invalid_array_spec_fails_clearly(self) -> None:
         for bad in ["", "9-0", "0--9", "a-b", "0-9%0", " 0-9"]:

@@ -231,6 +231,19 @@ def audit_iteration(
     slurm_job_ids = existing_iteration_state.get("slurm_job_ids", [])
     if not isinstance(slurm_job_ids, list):
         slurm_job_ids = []
+    submitted_case_ids = existing_iteration_state.get("submitted_case_ids", [])
+    if not isinstance(submitted_case_ids, list):
+        submitted_case_ids = []
+    try:
+        submitted_case_ids = sorted({int(item) for item in submitted_case_ids})
+    except (TypeError, ValueError):
+        submitted_case_ids = []
+    submitted_case_count = int(
+        existing_iteration_state.get(
+            "submitted_case_count",
+            len(submitted_case_ids) if submitted_case_ids else (n_cases if submitted else 0),
+        )
+    )
 
     status = classify_iteration_status(
         errors=errors,
@@ -265,6 +278,9 @@ def audit_iteration(
         "status": status,
         "submitted": submitted,
         "slurm_job_ids": slurm_job_ids,
+        "array_spec": existing_iteration_state.get("array_spec"),
+        "submitted_case_ids": submitted_case_ids,
+        "submitted_case_count": submitted_case_count,
         "n_cases": n_cases,
         "n_case_dirs": n_case_dirs,
         "n_case_states": n_case_states,

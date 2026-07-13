@@ -287,6 +287,20 @@ def evaluate_campaign_size_guard(
             details["selected_case_count"] = len(chosen)
             details["selected_case_ids"] = chosen
 
+            if cfg.get("max_total_submitted_cases") is not None:
+                limit = int(cfg["max_total_submitted_cases"])
+                prospective_total = int(details["total_submitted_cases"]) + len(
+                    chosen
+                )
+                details["prospective_total_submitted_cases"] = prospective_total
+                if prospective_total > limit:
+                    return _guard(
+                        "campaign_size_guard",
+                        "blocked",
+                        "max_total_submitted_cases_would_be_exceeded",
+                        details,
+                    )
+
             if cfg.get("max_cases_per_submit") is not None:
                 limit = int(cfg["max_cases_per_submit"])
                 details["max_cases_per_submit"] = limit
@@ -302,8 +316,12 @@ def evaluate_campaign_size_guard(
         limit = int(cfg["max_unsubmitted_materialized_cases"])
         unsubmitted = 0
         for item in iterations:
-            if not bool(item.get("submitted")):
-                unsubmitted += _int(item.get("n_cases"), 0)
+            n_cases = _int(item.get("n_cases"), 0)
+            default_submitted = n_cases if bool(item.get("submitted")) else 0
+            submitted_count = _int(
+                item.get("submitted_case_count"), default_submitted
+            )
+            unsubmitted += max(n_cases - submitted_count, 0)
 
         details["unsubmitted_materialized_cases"] = unsubmitted
         if unsubmitted > limit:

@@ -9,6 +9,9 @@ import unittest
 from pathlib import Path
 
 from campaign_workflow.cli.optimizer_tick import main as optimizer_tick_main
+from campaign_workflow.propose_next_iteration import (
+    evaluate_from_iteration_readiness,
+)
 
 
 class OptimizerTickPhase4DProposeExecuteTests(unittest.TestCase):
@@ -33,6 +36,29 @@ class OptimizerTickPhase4DProposeExecuteTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
+
+    def test_readiness_can_require_every_materialized_case_to_be_submitted(
+        self,
+    ) -> None:
+        readiness = evaluate_from_iteration_readiness(
+            from_state={
+                "status": "reduced_ready",
+                "recommended_action": "close_iteration",
+                "n_cases": 9,
+                "submitted_case_count": 1,
+                "n_submitted_reduced_valid": 1,
+                "n_submitted_sim_failed": 0,
+            },
+            from_summary={"n_cases": 9},
+            policy={
+                "require_all_materialized_cases_submitted": True,
+                "min_reduced_valid_to_continue": 1,
+            },
+        )
+
+        self.assertFalse(readiness["ok"])
+        self.assertEqual(readiness["recommended_action"], "submit_iteration")
+        self.assertIn("submitted=1, materialized=9", readiness["reason"])
 
     def test_execute_propose_next_iteration_runs_optimizer_prepares_materializes_and_updates_state(
         self,

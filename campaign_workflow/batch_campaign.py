@@ -65,6 +65,7 @@ class BatchCampaignPlan:
     fieldnames: tuple[str, ...]
     template_campaign_config: dict[str, Any]
     optimizer_plan: dict[str, Any]
+    candidate_batch_contract: dict[str, Any] | None
     campaign_config_output: dict[str, Any]
 
 
@@ -117,7 +118,12 @@ def validate_candidate_batch(
     *,
     allowed_laser_cases: frozenset[str] = ALLOWED_LASER_CASES,
     allowed_plasma_kinds: frozenset[str] = ALLOWED_PLASMA_KINDS,
+    contract: dict[str, Any] | None = None,
 ) -> None:
+    if contract is not None:
+        _validate_candidate_batch_from_contract(rows, fieldnames, contract)
+        return
+
     missing = [
         column
         for column in REQUIRED_CANDIDATE_BATCH_COLUMNS
@@ -171,6 +177,140 @@ def validate_candidate_batch(
             raise BatchCampaignError(
                 f"CAP_NR must be integer-like in row {row_number}: {row.get('CAP_NR')!r}"
             )
+
+
+def _validate_candidate_batch_from_contract(
+    rows: list[dict[str, str]],
+    fieldnames: list[str],
+    contract: dict[str, Any],
+) -> None:
+    if not isinstance(contract, dict):
+        raise BatchCampaignError("candidate_batch_contract must be an object")
+    if contract.get("schema_version", 1) != 1:
+        raise BatchCampaignError(
+            "candidate_batch_contract schema_version must be 1"
+        )
+
+    required = _contract_string_list(
+        contract.get("required_columns", []),
+        label="candidate_batch_contract.required_columns",
+    )
+    numeric = _contract_string_list(
+        contract.get("numeric_columns", []),
+        label="candidate_batch_contract.numeric_columns",
+    )
+    integer = _contract_string_list(
+        contract.get("integer_columns", []),
+        label="candidate_batch_contract.integer_columns",
+    )
+    required = list(dict.fromkeys(["CASE_ID", "CASE_NAME", *required]))
+
+    missing = [column for column in required if column not in fieldnames]
+    if missing:
+        raise BatchCampaignError(
+            f"candidate batch is missing required columns: {missing}"
+        )
+
+    choices = contract.get("choices", {}) or {}
+    if not isinstance(choices, dict):
+        raise BatchCampaignError("candidate_batch_contract.choices must be an object")
+    normalized_choices: dict[str, frozenset[str]] = {}
+    for column, raw_values in choices.items():
+        values = _contract_string_list(
+            raw_values,
+            label=f"candidate_batch_contract.choices.{column}",
+        )
+        if not values:
+            raise BatchCampaignError(
+                f"candidate_batch_contract.choices.{column} must not be empty"
+            )
+        normalized_choices[str(column)] = frozenset(values)
+
+    bounds = contract.get("bounds", {}) or {}
+    if not isinstance(bounds, dict):
+        raise BatchCampaignError("candidate_batch_contract.bounds must be an object")
+    normalized_bounds: dict[str, tuple[Decimal, Decimal]] = {}
+    for column, raw_bounds in bounds.items():
+        if not isinstance(raw_bounds, list) or len(raw_bounds) != 2:
+            raise BatchCampaignError(
+                f"candidate_batch_contract.bounds.{column} must contain two values"
+            )
+        low = _parse_finite_decimal(
+            str(raw_bounds[0]), column=f"bounds.{column}.low", row_number=0
+        )
+        high = _parse_finite_decimal(
+            str(raw_bounds[1]), column=f"bounds.{column}.high", row_number=0
+        )
+        if high < low:
+            raise BatchCampaignError(
+                f"candidate_batch_contract.bounds.{column} has high < low"
+            )
+        normalized_bounds[str(column)] = (low, high)
+
+    seen_case_ids: set[int] = set()
+    seen_case_names: set[str] = set()
+    for row_number, row in enumerate(rows, start=2):
+        for column in required:
+            if str(row.get(column, "")).strip() == "":
+                raise BatchCampaignError(f"{column} is empty in row {row_number}")
+
+        case_id = _parse_case_id(row.get("CASE_ID", ""), row_number=row_number)
+        case_name = str(row.get("CASE_NAME", "")).strip()
+        if case_id in seen_case_ids:
+            raise BatchCampaignError(f"duplicate CASE_ID in candidate batch: {case_id}")
+        if case_name in seen_case_names:
+            raise BatchCampaignError(
+                f"duplicate CASE_NAME in candidate batch: {case_name!r}"
+            )
+        seen_case_ids.add(case_id)
+        seen_case_names.add(case_name)
+        validate_safe_case_name(case_name, row_number=row_number)
+
+        parsed_numeric: dict[str, Decimal] = {}
+        for column in numeric:
+            parsed_numeric[column] = _parse_finite_decimal(
+                row.get(column, ""), column=column, row_number=row_number
+            )
+        for column in integer:
+            value = parsed_numeric.get(column)
+            if value is None:
+                value = _parse_finite_decimal(
+                    row.get(column, ""), column=column, row_number=row_number
+                )
+            if value != value.to_integral_value():
+                raise BatchCampaignError(
+                    f"{column} must be integer-like in row {row_number}: {row.get(column)!r}"
+                )
+
+        for column, allowed in normalized_choices.items():
+            value = str(row.get(column, "")).strip()
+            if value not in allowed:
+                raise BatchCampaignError(
+                    f"invalid {column} {value!r} in row {row_number}; "
+                    f"allowed values: {sorted(allowed)}"
+                )
+
+        for column, (low, high) in normalized_bounds.items():
+            value = parsed_numeric.get(column)
+            if value is None:
+                value = _parse_finite_decimal(
+                    row.get(column, ""), column=column, row_number=row_number
+                )
+            if value < low or value > high:
+                raise BatchCampaignError(
+                    f"{column}={value} in row {row_number} is outside [{low}, {high}]"
+                )
+
+
+def _contract_string_list(raw: Any, *, label: str) -> list[str]:
+    if not isinstance(raw, list):
+        raise BatchCampaignError(f"{label} must be a list")
+    values = [str(value).strip() for value in raw]
+    if any(not value for value in values):
+        raise BatchCampaignError(f"{label} contains an empty value")
+    if len(values) != len(set(values)):
+        raise BatchCampaignError(f"{label} contains duplicate values")
+    return values
 
 
 def validate_safe_case_name(case_name: str, *, row_number: int | None = None) -> None:
@@ -247,7 +387,18 @@ def build_batch_campaign_plan(
     _validate_template_campaign_config(template_campaign_config, campaign_json_source)
 
     rows, fieldnames = read_candidate_batch(candidate_batch)
-    validate_candidate_batch(rows, fieldnames)
+    candidate_batch_contract = optimizer_plan.get("candidate_batch_contract")
+    if candidate_batch_contract is not None and not isinstance(
+        candidate_batch_contract, dict
+    ):
+        raise BatchCampaignError(
+            "batch plan field 'candidate_batch_contract' must be an object"
+        )
+    validate_candidate_batch(
+        rows,
+        fieldnames,
+        contract=candidate_batch_contract,
+    )
 
     output_root = output_campaign_root.resolve(strict=False)
     campaign_config_output = dict(template_campaign_config)
@@ -274,6 +425,7 @@ def build_batch_campaign_plan(
         fieldnames=tuple(fieldnames),
         template_campaign_config=template_campaign_config,
         optimizer_plan=optimizer_plan,
+        candidate_batch_contract=candidate_batch_contract,
         campaign_config_output=campaign_config_output,
     )
 
@@ -282,6 +434,51 @@ def summarize_batch_campaign_plan(
     plan: BatchCampaignPlan, *, execute: bool
 ) -> dict[str, Any]:
     case_ids = [_parse_case_id(row["CASE_ID"], row_number=0) for row in plan.rows]
+    if plan.candidate_batch_contract is not None:
+        summary_columns = _contract_string_list(
+            plan.candidate_batch_contract.get("summary_columns", []),
+            label="candidate_batch_contract.summary_columns",
+        )
+        summary_counts: dict[str, dict[str, int]] = {}
+        for column in summary_columns:
+            counts: dict[str, int] = {}
+            for row in plan.rows:
+                value = str(row.get(column, "")).strip()
+                counts[value] = counts.get(value, 0) + 1
+            summary_counts[column] = dict(sorted(counts.items()))
+
+        return {
+            "mode": "execute" if execute else "dry-run",
+            "campaign_name": plan.campaign_name,
+            "candidate_batch": str(plan.candidate_batch),
+            "batch_plan": str(plan.batch_plan),
+            "template_campaign_root": str(plan.template_campaign_root),
+            "output_campaign_root": str(plan.output_campaign_root),
+            "output_exists": plan.output_campaign_root.exists(),
+            "cases": len(plan.rows),
+            "case_id_min": min(case_ids),
+            "case_id_max": max(case_ids),
+            "summary_counts": summary_counts,
+            "will_write": [
+                str(plan.campaign_json_output),
+                str(plan.cases_output),
+                str(plan.input_template_output),
+                str(plan.array_logs_output),
+                str(plan.provenance_output),
+            ],
+            "will_not": [
+                "materialize case directories",
+                "submit SLURM jobs",
+                "call sbatch/srun/mpiexec/mpirun",
+                "launch WarpX",
+                "run analysis",
+                "read HDF5/openPMD diagnostics",
+                "cleanup raw diagnostics",
+                "mutate the template campaign root",
+            ],
+            "destructive_operations": 0,
+        }
+
     plasma_counts: dict[str, int] = {}
     laser_counts: dict[str, int] = {}
     for row in plan.rows:
@@ -367,6 +564,7 @@ def build_provenance(plan: BatchCampaignPlan) -> dict[str, Any]:
         "output_campaign_root": str(plan.output_campaign_root),
         "case_count": len(plan.rows),
         "candidate_batch_columns": list(plan.fieldnames),
+        "candidate_batch_contract": plan.candidate_batch_contract,
         "optimizer_iteration": optimizer_plan.get("optimizer_iteration"),
         "objective_config_id": optimizer_plan.get("objective_config_id"),
         "source_campaigns": optimizer_plan.get("source_campaigns", []),

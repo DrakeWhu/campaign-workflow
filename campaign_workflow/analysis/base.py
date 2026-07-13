@@ -319,8 +319,12 @@ def _string_list(value: Any, label: str) -> list[str]:
 
 
 def _expand_template(text: str, *, campaign_root: Path, case_dir: Path, case: CaseRecord) -> str:
+    workflow_root = os.environ.get(
+        "WORKFLOW_ROOT", str(campaign_root / "workflow")
+    )
     return text.format(
         campaign_root=str(campaign_root),
+        workflow_root=workflow_root,
         case_dir=str(case_dir),
         case_id=case.case_id,
         case_name=case.case_name,

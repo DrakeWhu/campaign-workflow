@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from campaign_workflow.core.tsv_cases import load_campaign_config, load_cases
 from campaign_workflow.submit_iteration import expand_array_spec
 
 
@@ -65,7 +66,33 @@ def update_state_after_presubmitted_array(
     """Attach finite-chain array submit metadata to an existing iteration state."""
 
     array_spec = str(manifest.get("array_spec", ""))
-    submitted_case_ids = expand_array_spec(array_spec)
+    requested_task_ids = expand_array_spec(array_spec)
+    campaign_root = (
+        optimization_root / "iterations" / f"iter_{int(iteration):03d}"
+    )
+    try:
+        campaign_config = load_campaign_config(campaign_root)
+        cases = load_cases(campaign_root, campaign_config)
+    except Exception as exc:
+        raise PreSubmittedChainError(
+            f"failed to load materialized iteration {iteration}: {exc}"
+        ) from exc
+
+    materialized_case_ids = sorted(case.case_id for case in cases)
+    submitted_case_ids = sorted(
+        set(requested_task_ids) & set(materialized_case_ids)
+    )
+    missing_case_ids = sorted(
+        set(materialized_case_ids) - set(requested_task_ids)
+    )
+    if missing_case_ids:
+        raise PreSubmittedChainError(
+            "pre-submitted array does not cover materialized case IDs: "
+            f"{missing_case_ids}"
+        )
+    noop_task_ids = sorted(
+        set(requested_task_ids) - set(materialized_case_ids)
+    )
 
     job_id = str(array_job.get("job_id", "")).strip()
     if not job_id:
@@ -105,6 +132,7 @@ def update_state_after_presubmitted_array(
                     "array_spec": array_spec,
                     "submitted_case_ids": submitted_case_ids,
                     "submitted_case_count": len(submitted_case_ids),
+                    "array_noop_task_ids": noop_task_ids,
                     "submit_script": str(manifest.get("array_script", "")),
                     "working_directory": str(optimization_root),
                     "submit_log": None,

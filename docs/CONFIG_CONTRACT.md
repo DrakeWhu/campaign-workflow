@@ -251,11 +251,15 @@ Defaults:
   "max_total_materialized_cases": 1000,
   "max_total_submitted_cases": 1000,
   "max_cases_per_submit": 128,
-  "max_unsubmitted_materialized_cases": 128
+  "max_unsubmitted_materialized_cases": 128,
+  "require_all_materialized_cases_submitted": false
 }
 ```
 
 Policy keys are guardrails checked before materialization/submission where applicable.
+When `require_all_materialized_cases_submitted` is true, a staged pilot cannot
+advance the optimizer until every case in that materialized iteration has been
+included in a registered submission.
 
 ### Guards
 
@@ -263,13 +267,17 @@ Policy keys are guardrails checked before materialization/submission where appli
 "guards": {
   "enabled": true,
   "pause_file": "PAUSE_OPTIMIZATION",
-  "iteration_limits": {
+  "campaign_size": {
     "enabled": true,
-    "max_iterations": 5
+    "max_iterations": 5,
+    "max_cases_per_submit": 128,
+    "max_total_materialized_cases": 1000,
+    "max_total_submitted_cases": 1000,
+    "max_unsubmitted_materialized_cases": 128
   },
-  "storage_quota": {
+  "quota": {
     "enabled": true,
-    "mode": "block",
+    "mode": "hard",
     "hard_used_fraction": 0.95,
     "soft_used_fraction": 0.90,
     "min_free_bytes": 100000000000
