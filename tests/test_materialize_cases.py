@@ -64,6 +64,22 @@ class MaterializeCasesTests(unittest.TestCase):
         env_text = (self.root / "000_case" / "case.env").read_text(encoding="utf-8")
         self.assertIn('export CAP_PLATEAU_LENGTH_M="5e-3"', env_text)
 
+    def test_materializes_optional_nitrogen_fraction(self) -> None:
+        self._write_cases(
+            "CASE_ID\tCASE_NAME\tLASER_CASE\tPLASMA_KIND\tN0_CM3\tPLATEAU_LENGTH_MM\tRADIUS_UM\tFOCUS_OFFSET_FROM_PLATEAU_START_MM\tNITROGEN_DOPANT_FRACTION\tCAP_RMAX_UM\tCAP_NR\n"
+            "0\t000_case\tf20\tchan\t7e+17\t5\t75\t-5\t0.005\t90\t192\n"
+        )
+
+        rc, _stdout, stderr = self._run_cli("--verbose")
+
+        self.assertEqual(rc, 0, stderr)
+        env_text = (self.root / "000_case" / "case.env").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'export CAP_NITROGEN_DOPANT_FRACTION="0.005"', env_text
+        )
+
     def test_converts_radius_um_to_m_when_present(self) -> None:
         self._write_cases(
             "CASE_ID\tCASE_NAME\tLASER_CASE\tPLASMA_KIND\tN0_CM3\tPLATEAU_LENGTH_MM\tRADIUS_UM\tFOCUS_OFFSET_FROM_PLATEAU_START_MM\tCAP_RMAX_UM\tCAP_NR\n"

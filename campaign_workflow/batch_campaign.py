@@ -41,6 +41,10 @@ NUMERIC_CANDIDATE_BATCH_COLUMNS = (
     "CAP_NR",
 )
 
+OPTIONAL_NUMERIC_CANDIDATE_BATCH_COLUMNS = (
+    "NITROGEN_DOPANT_FRACTION",
+)
+
 ALLOWED_LASER_CASES = frozenset({"f20", "f32", "f40"})
 ALLOWED_PLASMA_KINDS = frozenset({"chan", "uni", "vac"})
 
@@ -169,6 +173,17 @@ def validate_candidate_batch(
             _parse_finite_decimal(
                 row.get(column, ""), column=column, row_number=row_number
             )
+
+        for column in OPTIONAL_NUMERIC_CANDIDATE_BATCH_COLUMNS:
+            if column not in fieldnames:
+                continue
+            value = _parse_finite_decimal(
+                row.get(column, ""), column=column, row_number=row_number
+            )
+            if value < Decimal("0") or value > Decimal("1"):
+                raise BatchCampaignError(
+                    f"{column} must be within [0, 1] in row {row_number}"
+                )
 
         cap_nr = _parse_finite_decimal(
             row.get("CAP_NR", ""), column="CAP_NR", row_number=row_number

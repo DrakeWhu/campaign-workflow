@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "optimization_name": "clpu_capillary_guiding_bo_004_corrected_n2_soft50",
+  "optimizer": {
+    "working_directory": "/gpfs/home/jrodriguez/apps/src/campaign-optimizer",
+    "env_script": "/gpfs/home/jrodriguez/apps/env/campaign-optimizer.sh",
+    "command": [
+      "python",
+      "-m",
+      "campaign_optimizer.cli.run_iteration",
+      "--config",
+      "{optimizer_config}",
+      "--iteration",
+      "{next_iteration}",
+      "--build-candidate-batch",
+      "--build-report"
+    ],
+    "optimizer_config": "/gpfs/home/jrodriguez/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50/optimizer.json"
+  },
+  "campaign_preparation": {
+    "template_campaign_root": "template_campaign",
+    "iterations_dir": "iterations",
+    "optimizer_runs_dir": "optimizer_runs",
+    "campaign_name_template": "clpu_capillary_guiding_bo_004_corrected_n2_soft50_iter_{next_iteration:03d}",
+    "materialize_after_prepare": true,
+    "init_case_states_after_materialize": true
+  },
+  "policy": {
+    "max_iterations": 27,
+    "max_total_materialized_cases": 217,
+    "max_total_submitted_cases": 217,
+    "max_cases_per_submit": 35,
+    "max_unsubmitted_materialized_cases": 35,
+    "require_all_materialized_cases_submitted": true,
+    "min_reduced_valid_to_continue": 1,
+    "min_valid_fraction_to_continue": 0.5,
+    "max_failed_fraction_to_continue": 0.5
+  },
+  "guards": {
+    "enabled": true,
+    "pause_file": "PAUSE_OPTIMIZATION",
+    "campaign_size": {
+      "enabled": true,
+      "max_iterations": 27,
+      "max_total_materialized_cases": 217,
+      "max_total_submitted_cases": 217,
+      "max_cases_per_submit": 35,
+      "max_unsubmitted_materialized_cases": 35
+    },
+    "quota": {
+      "enabled": true,
+      "mode": "hard",
+      "hard_used_fraction": 0.95,
+      "soft_used_fraction": 0.9,
+      "min_free_bytes": 100000000000
+    },
+    "walltime": {
+      "enabled": false,
+      "mode": "warn",
+      "max_runtime_fraction": 0.85,
+      "partition_time_limit_seconds": 21600
+    }
+  },
+  "stopping": {
+    "enabled": true,
+    "mode": "hard",
+    "max_iterations": 27,
+    "hypervolume_plateau": {"enabled": false},
+    "candidate_novelty": {"enabled": false},
+    "manual_review": {"enabled": false},
+    "weak_batch": {"enabled": false}
+  }
+}

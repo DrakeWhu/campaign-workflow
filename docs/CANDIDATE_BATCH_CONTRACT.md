@@ -33,6 +33,11 @@ CAP_NR
 
 Extra columns are allowed and preserved in `cases.tsv`.
 
+`NITROGEN_DOPANT_FRACTION` is an optional, finite atomic-nuclei fraction in
+`[0, 1]`. Corrected CLPU ionization campaigns require it explicitly and
+materialize it as `CAP_NITROGEN_DOPANT_FRACTION`; legacy batches remain valid
+without the column.
+
 ## Value rules
 
 `CASE_ID`:
@@ -74,6 +79,7 @@ RADIUS_UM
 FOCUS_OFFSET_FROM_PLATEAU_START_MM
 CAP_RMAX_UM
 CAP_NR
+NITROGEN_DOPANT_FRACTION (when present)
 ```
 
 `CAP_NR` must be integer-like.
@@ -104,9 +110,9 @@ inclusive.
 ## Example
 
 ```tsv
-CASE_ID	CASE_NAME	LASER_CASE	PLASMA_KIND	N0_CM3	PLATEAU_LENGTH_MM	DIAMETER_UM	RADIUS_UM	FOCUS_OFFSET_FROM_PLATEAU_START_MM	CAP_RMAX_UM	CAP_NR
-0	case_000	f20	chan	4.0e18	10	300	150	0	180	192
-1	case_001	f32	uni	3.0e18	10	300	150	0	180	192
+CASE_ID	CASE_NAME	LASER_CASE	PLASMA_KIND	N0_CM3	PLATEAU_LENGTH_MM	DIAMETER_UM	RADIUS_UM	FOCUS_OFFSET_FROM_PLATEAU_START_MM	NITROGEN_DOPANT_FRACTION	CAP_RMAX_UM	CAP_NR
+0	case_000	f20	chan	4.0e18	10	300	150	0	0.005	250	288
+1	case_001	f32	uni	3.0e18	10	300	150	0	0	250	288
 ```
 
 ## Preparation behavior

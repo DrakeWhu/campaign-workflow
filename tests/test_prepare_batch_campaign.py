@@ -24,6 +24,7 @@ FIELDNAMES = [
     "DIAMETER_UM",
     "RADIUS_UM",
     "FOCUS_OFFSET_FROM_PLATEAU_START_MM",
+    "NITROGEN_DOPANT_FRACTION",
     "CAP_RMAX_UM",
     "CAP_NR",
     "OPT_ITERATION",
@@ -157,6 +158,14 @@ class PrepareBatchCampaignTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("CAP_NR must be numeric", stderr)
 
+    def test_fails_if_nitrogen_fraction_is_out_of_bounds(self) -> None:
+        self._write_candidate_batch(
+            first_overrides={"NITROGEN_DOPANT_FRACTION": "1.01"}
+        )
+        rc, _stdout, stderr = self._run_cli("--dry-run")
+        self.assertEqual(rc, 1)
+        self.assertIn("NITROGEN_DOPANT_FRACTION must be within [0, 1]", stderr)
+
     def test_execute_fails_if_output_campaign_root_already_exists(self) -> None:
         self.output_root.mkdir()
         rc, _stdout, stderr = self._run_cli("--execute")
@@ -247,6 +256,7 @@ class PrepareBatchCampaignTests(unittest.TestCase):
                 "DIAMETER_UM": "500.0",
                 "RADIUS_UM": "250.0",
                 "FOCUS_OFFSET_FROM_PLATEAU_START_MM": "5.0",
+                "NITROGEN_DOPANT_FRACTION": "0.005",
                 "CAP_RMAX_UM": "300.0",
                 "CAP_NR": "192",
                 "OPT_ITERATION": "0",
@@ -263,6 +273,7 @@ class PrepareBatchCampaignTests(unittest.TestCase):
                 "DIAMETER_UM": "500.0",
                 "RADIUS_UM": "250.0",
                 "FOCUS_OFFSET_FROM_PLATEAU_START_MM": "4.5",
+                "NITROGEN_DOPANT_FRACTION": "0.01",
                 "CAP_RMAX_UM": "300.0",
                 "CAP_NR": "192",
                 "OPT_ITERATION": "0",

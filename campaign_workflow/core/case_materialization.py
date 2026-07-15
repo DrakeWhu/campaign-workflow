@@ -42,6 +42,22 @@ DEFAULT_ENV_COLUMN_RULES = (
         "CAP_FOCUS_OFFSET_FROM_PLATEAU_START_MM",
         required=True,
     ),
+    EnvColumnRule(
+        "NITROGEN_DOPANT_FRACTION",
+        "CAP_NITROGEN_DOPANT_FRACTION",
+        required=False,
+    ),
+    EnvColumnRule(
+        "PULSE_RESONANCE_FACTOR",
+        "CAP_PULSE_RESONANCE_FACTOR",
+        required=False,
+    ),
+    EnvColumnRule(
+        "LASER_DURATION_FWHM_FS",
+        "CAP_LASER_INTENSITY_FWHM_S",
+        required=False,
+        scale=Decimal("1e-15"),
+    ),
     EnvColumnRule("CAP_RMAX_UM", "CAP_RMAX_M", required=True, scale=Decimal("1e-6")),
     EnvColumnRule("CAP_NR", "CAP_NR", required=True),
 )
