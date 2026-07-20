@@ -119,6 +119,7 @@ class MultichannelSunriseExampleTests(unittest.TestCase):
             "multichannel_honeycomb_3d_energy_soft_v2",
             self.optimization["campaign_preparation"]["campaign_name_template"],
         )
+        self.assertEqual(self.optimization["optimizer"]["working_directory"], ".")
 
     def test_staged_pilot_is_registered_and_guards_use_runtime_schema(self) -> None:
         readme = (self.example / "README.md").read_text(encoding="utf-8")
