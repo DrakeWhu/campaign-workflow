@@ -125,6 +125,18 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         self.assertIn("NO_SBATCH_CALLED=1", text)
         self.assertIn("NO_OPTIMIZATION_STATE_CHANGED=1", text)
         self.assertIn('plasma_electrons.intervals = "60326:60326"', text)
+        self.assertIn('resolved["schema_version"] == 3', text)
+        self.assertIn(
+            'resolved["particle_diagnostic_alignment_error_steps"] == -647',
+            text,
+        )
+        self.assertIn('resolved["max_steps_grid_cfl_derived"] == 91459', text)
+        self.assertNotIn('resolved["schema_version"] == 2', text)
+        self.assertNotIn("clpu_carlos_plateau_quasiparabolic_n5_adk_v4", text)
+        self.assertNotIn(
+            'resolved["particle_diagnostic_alignment_error_steps"] == -1334',
+            text,
+        )
         unsafe = re.compile(
             r"(^|[;|&()\s])"
             r"(sbatch|srun|mpiexec|mpirun|rm|logout)"

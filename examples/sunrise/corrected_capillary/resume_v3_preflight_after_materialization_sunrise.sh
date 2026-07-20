@@ -208,8 +208,10 @@ for row, expected_fraction in zip(rows[:2], [0.0, 0.005]):
     resolved = json.loads((case_dir / "resolved_parameters.json").read_text())
     serialized = (case_dir / f"inputs_capillary_{row['CASE_NAME']}").read_text()
 
-    assert resolved["schema_version"] == 2
-    assert resolved["physics_model_id"] == "clpu_carlos_plateau_quasiparabolic_n5_adk_v4"
+    assert resolved["schema_version"] == 3
+    assert resolved["physics_model_id"] == (
+        "clpu_carlos_plateau_quasiparabolic_n5_adk_v5_grid_cfl"
+    )
     assert resolved["channel_profile_longitudinal_scope"] == "plateau_only"
     assert resolved["ramp_radial_model"] == "uniform_inside_capillary"
     assert math.isclose(
@@ -225,20 +227,29 @@ for row, expected_fraction in zip(rows[:2], [0.0, 0.005]):
     assert resolved["particle_diagnostic_target_distance_m"] == (
         resolved["plateau_end_z"] - resolved["plasma_start_z"]
     )
-    assert resolved["schema_version"] == 3
-    assert resolved["physics_model_id"] == (
-        "clpu_carlos_plateau_quasiparabolic_n5_adk_v5_grid_cfl"
-    )
     assert resolved["time_step_model"] == (
         "WarpX_CylindricalYeeAlgorithm_ComputeMaxDt"
     )
     assert resolved["max_steps"] == 91459
+    assert resolved["max_steps_grid_cfl_derived"] == 91459
     assert resolved["field_diagnostic_period"] == 1946
     assert resolved["particle_diagnostic_target_iteration_unaligned"] == 60973
     assert resolved["particle_diagnostic_iteration"] == 60326
     assert resolved["particle_diagnostic_intervals"] == "60326:60326"
     assert resolved["particle_diagnostic_iteration"] % resolved["field_diagnostic_period"] == 0
-    assert resolved["particle_diagnostic_alignment_error_steps"] == -1334
+    assert resolved["particle_diagnostic_alignment_error_steps"] == -647
+    assert math.isclose(
+        resolved["particle_diagnostic_aligned_distance_m"],
+        resolved["particle_diagnostic_iteration"]
+        * resolved["moving_window_step_distance_m"],
+        rel_tol=1.0e-14,
+        abs_tol=1.0e-15,
+    )
+    assert abs(resolved["particle_diagnostic_alignment_error_m"]) <= (
+        0.5
+        * resolved["field_diagnostic_period"]
+        * resolved["moving_window_step_distance_m"]
+    )
     assert resolved["particle_diagnostic_dump_last_timestep"] is False
     assert resolved["particle_diagnostic_min_energy_MeV"] == 5.0
     assert resolved["particle_diagnostic_forward_only"] is True
@@ -292,7 +303,7 @@ assert not hdf5, hdf5
 summary = {
     "schema_version": 1,
     "status": "ready_for_canary",
-    "resume_reason": "WarpX interval strings are serialized with quotes",
+    "resume_reason": "existing materialization revalidated after source update",
     "root": str(root),
     "source_commits": {
         "guiding_analysis_module": os.environ["GA_SHA"],
