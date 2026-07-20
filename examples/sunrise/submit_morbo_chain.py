@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ class ChainArgs:
     array_script: Path
     tick_script: Path
     case_runner: Path | None
+    initial_dependency_job_id: str | None
 
     @property
     def final_iteration(self) -> int:
@@ -110,6 +112,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Case-local simulation runner exported to every iteration array. "
             "When omitted, the case-cycle default is used."
+        ),
+    )
+    parser.add_argument(
+        "--initial-dependency-job-id",
+        default=None,
+        help=(
+            "Optional existing SLURM job ID. The first iteration array is "
+            "submitted with afterok:<job-id>; later dependencies remain internal "
+            "to this finite chain."
         ),
     )
     parser.add_argument(
@@ -171,6 +182,11 @@ def resolve_args(raw: argparse.Namespace) -> ChainArgs:
         array_script=array_script,
         tick_script=tick_script,
         case_runner=case_runner,
+        initial_dependency_job_id=(
+            str(raw.initial_dependency_job_id).strip()
+            if raw.initial_dependency_job_id is not None
+            else None
+        ),
     )
     validate_chain_args(args)
     return args
@@ -221,6 +237,12 @@ def validate_chain_args(args: ChainArgs) -> None:
         raise MorboChainSubmitError(
             f"optimization config does not exist: {args.optimization_config}"
         )
+    if args.initial_dependency_job_id is not None and re.fullmatch(
+        r"[1-9][0-9]*", args.initial_dependency_job_id
+    ) is None:
+        raise MorboChainSubmitError(
+            "--initial-dependency-job-id must be a positive numeric SLURM job ID"
+        )
 
 
 def build_symbolic_chain(args: ChainArgs) -> list[dict[str, Any]]:
@@ -230,11 +252,14 @@ def build_symbolic_chain(args: ChainArgs) -> list[dict[str, Any]]:
         array_symbol = f"A_{iteration:03d}"
         tick_symbol = f"T_{iteration:03d}"
         previous_tick_symbol = f"T_{iteration - 1:03d}"
-        array_dependency = (
-            None
-            if iteration == args.start_iteration
-            else f"afterok:{previous_tick_symbol}"
-        )
+        if iteration == args.start_iteration:
+            array_dependency = (
+                f"afterok:{args.initial_dependency_job_id}"
+                if args.initial_dependency_job_id is not None
+                else None
+            )
+        else:
+            array_dependency = f"afterok:{previous_tick_symbol}"
         jobs.append(
             {
                 "kind": "array",
@@ -371,7 +396,7 @@ def export_arg(values: dict[str, object]) -> str:
 def submit_finite_chain(args: ChainArgs) -> dict[str, Any]:
     args.optimization_root.joinpath("loop_logs").mkdir(parents=True, exist_ok=True)
     jobs: list[dict[str, Any]] = []
-    previous_tick_job_id: str | None = None
+    previous_tick_job_id: str | None = args.initial_dependency_job_id
 
     for iteration in range(args.start_iteration, args.final_iteration + 1):
         next_iteration = iteration + 1
@@ -521,6 +546,7 @@ def build_manifest(
         "case_runner": (
             str(args.case_runner) if args.case_runner is not None else None
         ),
+        "initial_dependency_job_id": args.initial_dependency_job_id,
         "optimization_config": (
             str(args.optimization_config)
             if args.optimization_config is not None
@@ -533,6 +559,8 @@ def build_manifest(
 
 def chain_text(args: ChainArgs) -> str:
     parts: list[str] = []
+    if args.initial_dependency_job_id is not None:
+        parts.append(f"J_{args.initial_dependency_job_id}")
     for iteration in range(args.start_iteration, args.final_iteration + 1):
         parts.append(f"A_{iteration}")
         parts.append(f"T_{iteration}")

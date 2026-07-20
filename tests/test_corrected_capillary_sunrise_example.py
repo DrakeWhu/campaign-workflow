@@ -164,6 +164,74 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         )
         self.assertIsNone(unsafe.search(text))
 
+    def test_canary_results_audit_is_read_only_and_complete(self) -> None:
+        script = EXAMPLE / "audit_v2_canary_results_sunrise.sh"
+        text = script.read_text(encoding="utf-8")
+        result = subprocess.run(
+            ["bash", "-n", str(script)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for marker in [
+            "CANARY_RESULTS_OK=1",
+            "READY_FOR_REST_AND_CHAIN=1",
+            "PARTICLE_EXIT_SELECTION_VALIDATED=1",
+            "SPECIES_PROVENANCE_VALIDATED=1",
+            "ADK_ELECTRONS_OBSERVED_IN_DOPED_CANARY=1",
+            "ANIMATIONS_VALIDATED=1",
+            "NO_HDF5_REMAINING=1",
+            "NO_STATE_CHANGED=1",
+            "NO_SBATCH_CALLED=1",
+        ]:
+            self.assertIn(marker, text)
+        self.assertIn('state["state"] == "Raw_deleted"', text)
+        self.assertIn('selection["target_iteration_delta"] == 0', text)
+        unsafe = re.compile(
+            r"(^|[;|&()\s])"
+            r"(sbatch|srun|mpiexec|mpirun|rm|logout)"
+            r"([;|&()\s]|$)",
+            flags=re.MULTILINE,
+        )
+        self.assertIsNone(unsafe.search(text))
+
+    def test_rest_and_chain_launcher_resumes_partial_iteration_without_overlap(
+        self,
+    ) -> None:
+        script = EXAMPLE / "launch_v2_rest_and_chain_sunrise.sh"
+        text = script.read_text(encoding="utf-8")
+        result = subprocess.run(
+            ["bash", "-n", str(script)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for required in [
+            'REST_ARRAY_SPEC="2-34"',
+            'CHAIN_ARRAY_SPEC="0-31"',
+            "CHAIN_START_ITERATION=1",
+            "CHAIN_ITERATION_COUNT=21",
+            "--allow-additional-cases",
+            "--initial-dependency-job-id",
+            '--dependency="afterok:${REST_JOB_ID}"',
+            "READY_FOR_REST_AND_CHAIN",
+            "OPTIONAL_MORBO_ITERATIONS_22-26_NOT_SUBMITTED=1",
+            "NO_ARRAY_THROTTLE=1",
+            "MULTICHANNEL_BASELINE_PRESERVED=1",
+        ]:
+            self.assertIn(required, text)
+        self.assertNotIn('REST_ARRAY_SPEC="2-34%', text)
+        self.assertNotIn('CHAIN_ARRAY_SPEC="0-31%', text)
+        self.assertNotRegex(text, r"(^|[;|&()\s])(rm|logout)([;|&()\s]|$)")
+
+        rest_position = text.index('SUBMISSION_PHASE="rest_iter000"')
+        tick_position = text.index('SUBMISSION_PHASE="tick000"')
+        chain_position = text.index('SUBMISSION_PHASE="finite_chain"')
+        self.assertLess(rest_position, tick_position)
+        self.assertLess(tick_position, chain_position)
+
     def test_documented_reference_recovers_40p5_um(self) -> None:
         diameter = self.physics.channel_matched_spot_diameter_m(150.0e-6, 4.0e18)
         self.assertAlmostEqual(diameter * 1.0e6, 40.5, places=12)

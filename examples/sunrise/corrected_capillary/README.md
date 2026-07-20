@@ -218,6 +218,38 @@ reduced artifacts. Raw HDF5 cleanup is requested, but it can execute only
 after raw and reduced validation plus the delete-manifest gate succeed. The
 launcher does not submit any later Sobol or MORBO work.
 
+After both canary tasks finish, audit their complete lifecycle before releasing
+anything else:
+
+```bash
+bash --noprofile --norc \
+    "${HOME}/apps/src/campaign-workflow-clpu-adk/examples/sunrise/corrected_capillary/audit_v2_canary_results_sunrise.sh"
+```
+
+This audit is read-only apart from its timestamped audit log. It requires both
+controls to reach `Raw_deleted`, verifies every required guiding, particle and
+animation artifact, checks that the particle snapshot is exactly the aligned
+plateau-exit iteration, confirms the three provenance scopes, hashes the two
+decoded MP4 files, and proves that raw HDF5 cleanup occurred only after the
+validation gates. It finishes with `READY_FOR_REST_AND_CHAIN=1` and prints a
+compact species-separated particle summary.
+
+Only after reviewing that output, submit the remaining iteration-0 cases and
+the reviewed finite chain:
+
+```bash
+bash --noprofile --norc \
+    "${HOME}/apps/src/campaign-workflow-clpu-adk/examples/sunrise/corrected_capillary/launch_v2_rest_and_chain_sunrise.sh"
+```
+
+The resume launcher never resubmits control IDs 0 and 1. It submits IDs 2--34,
+then an `afterok` tick for iteration 0, followed by the second Sobol batch and
+20 MORBO batches. Every array/tick transition is `afterok`; arrays have no
+concurrency throttle. The launcher ends at iteration 21, so its last tick may
+materialize iteration 22 for inspection but never submits optional iterations
+22--26. All simulation arrays use T12H, optimizer ticks use T1H, and cleanup
+remains gated by required-output validation.
+
 ## Release policy
 
 Do not pre-submit the full 27-iteration chain at bootstrap. Run the two Sobol

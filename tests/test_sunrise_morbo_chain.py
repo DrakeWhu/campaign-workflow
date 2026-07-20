@@ -148,6 +148,81 @@ class SunriseMorboChainTests(unittest.TestCase):
         self.assertIn("--mem=8G", tick_command)
         self.assertIn("--ntasks=24", array_command)
 
+    def test_initial_dependency_gates_only_the_first_array(self) -> None:
+        tmp, root, workflow_env = self._make_root()
+        self.addCleanup(tmp.cleanup)
+        stdout = io.StringIO()
+
+        argv = self._base_argv(root, workflow_env) + [
+            "--initial-dependency-job-id",
+            "900001",
+        ]
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(self.module.subprocess, "run") as run_mock:
+                with contextlib.redirect_stdout(stdout):
+                    rc = self.module.main(argv)
+
+        self.assertEqual(rc, 0)
+        run_mock.assert_not_called()
+        data = json.loads(stdout.getvalue())
+        self.assertEqual(data["initial_dependency_job_id"], "900001")
+        self.assertEqual(
+            data["chain_text"],
+            "J_900001 -> A_2 -> T_2 -> A_3 -> T_3 -> A_4 -> T_4",
+        )
+        self.assertEqual(data["jobs"][0]["dependency"], "afterok:900001")
+        self.assertEqual(data["jobs"][1]["dependency"], "afterok:A_002")
+        self.assertEqual(data["jobs"][2]["dependency"], "afterok:T_002")
+
+    def test_invalid_initial_dependency_is_rejected_before_sbatch(self) -> None:
+        tmp, root, workflow_env = self._make_root()
+        self.addCleanup(tmp.cleanup)
+        stderr = io.StringIO()
+
+        argv = self._base_argv(root, workflow_env) + [
+            "--initial-dependency-job-id",
+            "afterok:900001",
+        ]
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(self.module.subprocess, "run") as run_mock:
+                with contextlib.redirect_stderr(stderr):
+                    rc = self.module.main(argv)
+
+        self.assertEqual(rc, 2)
+        run_mock.assert_not_called()
+        self.assertIn("positive numeric SLURM job ID", stderr.getvalue())
+
+    def test_execute_preserves_initial_dependency_then_chains_job_ids(self) -> None:
+        tmp, root, workflow_env = self._make_root()
+        self.addCleanup(tmp.cleanup)
+        stdout = io.StringIO()
+        submitted_ids = iter(["100", "101", "102", "103", "104", "105"])
+
+        def fake_run(command, **kwargs):
+            job_id = next(submitted_ids)
+            return SimpleNamespace(returncode=0, stdout=f"{job_id}\n", stderr="")
+
+        argv = self._base_argv(root, workflow_env) + [
+            "--initial-dependency-job-id",
+            "900001",
+            "--execute",
+        ]
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(
+                self.module.subprocess, "run", side_effect=fake_run
+            ) as run_mock:
+                with contextlib.redirect_stdout(stdout):
+                    rc = self.module.main(argv)
+
+        self.assertEqual(rc, 0)
+        commands = [call.args[0] for call in run_mock.call_args_list]
+        self.assertIn("--dependency=afterok:900001", commands[0])
+        self.assertIn("--dependency=afterok:100", commands[1])
+        self.assertIn("--dependency=afterok:101", commands[2])
+        data = json.loads(stdout.getvalue())
+        self.assertEqual(data["initial_dependency_job_id"], "900001")
+        self.assertEqual(data["jobs"][0]["dependency"], "afterok:900001")
+
     def test_execute_submits_chain_with_afterok_dependencies_and_manifest(self) -> None:
         tmp, root, workflow_env = self._make_root()
         self.addCleanup(tmp.cleanup)
