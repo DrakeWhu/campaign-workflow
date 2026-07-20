@@ -12,7 +12,7 @@
       "--build-candidate-batch"
     ],
     "optimizer_config": "optimizer.json",
-    "working_directory": "{optimization_root}",
+    "working_directory": ".",
     "env_script": "~/apps/env/campaign-optimizer.sh"
   },
   "campaign_preparation": {
