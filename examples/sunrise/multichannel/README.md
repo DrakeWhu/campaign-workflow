@@ -243,9 +243,11 @@ python -m campaign_workflow.cli.optimizer_tick \
 
 ## Finite chained iterations
 
-After iteration 0 is complete and reconciled, the chain can use a nine-task
-array. Iterations with only four MORBO candidates leave higher task IDs as
-safe no-ops:
+The 16-point Sobol design is split across the first two iterations:
+`iter_000` contains the reference plus the first eight Sobol points, and
+`iter_001` contains the remaining eight. Later iterations also use batches of
+eight candidates. The chain can therefore keep a nine-task array; task ID 8 is
+a safe no-op after `iter_000`:
 
 ```bash
 python "${WORKFLOW_ROOT}/examples/sunrise/submit_morbo_chain.py" \
