@@ -185,6 +185,15 @@ Use the existing `prepare_batch_campaign`, `materialize_cases` and
 `init_case_states` commands exactly as in the multichannel SUNRISE example,
 with this template and output root. None of those commands submits a job.
 
+On SUNRISE, after checking out the reviewed workflow commit in the isolated
+ADK worktree, `rebuild_v2_before_canary_sunrise.sh` performs this complete
+rebuild. It updates the other two isolated ADK worktrees to their reviewed
+commits, runs all three test suites, proves that the iteration-0 batch is
+byte-identical to the previous root, materializes all 35 cases, and runs PICMI
+serialization preflights for the first two controls. The script contains no
+SLURM submission and finishes with `READY_FOR_CANARY=1` only after confirming
+that no HDF5 files or submitted cases exist.
+
 ## Release policy
 
 Do not pre-submit the full 27-iteration chain at bootstrap. Run the two Sobol

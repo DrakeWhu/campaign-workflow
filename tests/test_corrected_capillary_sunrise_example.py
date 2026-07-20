@@ -5,6 +5,8 @@ import json
 import math
 import os
 from pathlib import Path
+import re
+import subprocess
 import sys
 import tempfile
 import types
@@ -82,6 +84,30 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
             self.optimization["campaign_preparation"]["campaign_name_template"]
             .startswith(expected)
         )
+
+    def test_rebuild_script_is_syntax_checked_and_stops_before_canary(self) -> None:
+        script = EXAMPLE / "rebuild_v2_before_canary_sunrise.sh"
+        text = script.read_text(encoding="utf-8")
+        result = subprocess.run(
+            ["bash", "-n", str(script)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2", text)
+        self.assertIn("prepare_batch_campaign.py", text)
+        self.assertIn("materialize_cases.py", text)
+        self.assertIn("init_case_states.py", text)
+        self.assertIn("READY_FOR_CANARY=1", text)
+        self.assertIn("NO_SBATCH_CALLED=1", text)
+        unsafe = re.compile(
+            r"(^|[;|&()\s])"
+            r"(sbatch|srun|mpiexec|mpirun|rm|logout)"
+            r"([;|&()\s]|$)",
+            flags=re.MULTILINE,
+        )
+        self.assertIsNone(unsafe.search(text))
 
     def test_documented_reference_recovers_40p5_um(self) -> None:
         diameter = self.physics.channel_matched_spot_diameter_m(150.0e-6, 4.0e18)
