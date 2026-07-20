@@ -24,9 +24,9 @@
     "init_case_states_after_materialize": true
   },
   "policy": {
-    "max_iterations": 12,
-    "max_total_materialized_cases": 80,
-    "max_total_submitted_cases": 80,
+    "max_iterations": 100,
+    "max_total_materialized_cases": 1000,
+    "max_total_submitted_cases": 1000,
     "max_cases_per_submit": 9,
     "max_unsubmitted_materialized_cases": 9,
     "require_all_materialized_cases_submitted": true,
@@ -39,9 +39,9 @@
     "pause_file": "PAUSE_OPTIMIZATION",
     "campaign_size": {
       "enabled": true,
-      "max_iterations": 12,
-      "max_total_materialized_cases": 80,
-      "max_total_submitted_cases": 80,
+      "max_iterations": 100,
+      "max_total_materialized_cases": 1000,
+      "max_total_submitted_cases": 1000,
       "max_cases_per_submit": 9,
       "max_unsubmitted_materialized_cases": 9
     },
@@ -62,7 +62,7 @@
   "stopping": {
     "enabled": true,
     "mode": "hard",
-    "max_iterations": 12,
+    "max_iterations": 100,
     "hypervolume_plateau": {
       "enabled": false
     },
