@@ -194,6 +194,14 @@ serialization preflights for the first two controls. The script contains no
 SLURM submission and finishes with `READY_FOR_CANARY=1` only after confirming
 that no HDF5 files or submitted cases exist.
 
+If the rebuild has already completed materialization but stops during the
+PICMI serialization gate, do not delete or recreate the root.
+`resume_v2_preflight_after_materialization_sunrise.sh` first proves that the
+batch, 35 `Created` states, optimization state and absence of HDF5/submissions
+match that exact safe checkpoint. It then runs only the corrected PICMI test
+and the two materialized control preflights, leaving optimization state
+byte-for-byte unchanged.
+
 ## Release policy
 
 Do not pre-submit the full 27-iteration chain at bootstrap. Run the two Sobol

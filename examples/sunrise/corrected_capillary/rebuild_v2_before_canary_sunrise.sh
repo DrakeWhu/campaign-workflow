@@ -412,7 +412,7 @@ for row, expected_fraction in zip(rows[:2], [0.0, 0.005]):
     assert resolved["particle_diagnostic_filter_expression"] == expected_filter
     assert resolved["particle_diagnostic_iteration"] != resolved["max_steps"]
 
-    assert "plasma_electrons.intervals = 126666:126666" in serialized
+    assert 'plasma_electrons.intervals = "126666:126666"' in serialized
     assert "plasma_electrons.dump_last_timestep = 0" in serialized
     assert "plasma_electrons.dump_last_timestep = 1" not in serialized
     for species in [

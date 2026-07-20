@@ -109,6 +109,29 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         )
         self.assertIsNone(unsafe.search(text))
 
+    def test_resume_preflight_script_is_safe_and_state_preserving(self) -> None:
+        script = EXAMPLE / "resume_v2_preflight_after_materialization_sunrise.sh"
+        text = script.read_text(encoding="utf-8")
+        result = subprocess.run(
+            ["bash", "-n", str(script)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("RESUME_POINT_OK=1", text)
+        self.assertIn("READY_FOR_CANARY=1", text)
+        self.assertIn("NO_SBATCH_CALLED=1", text)
+        self.assertIn("NO_OPTIMIZATION_STATE_CHANGED=1", text)
+        self.assertIn('plasma_electrons.intervals = "126666:126666"', text)
+        unsafe = re.compile(
+            r"(^|[;|&()\s])"
+            r"(sbatch|srun|mpiexec|mpirun|rm|logout)"
+            r"([;|&()\s]|$)",
+            flags=re.MULTILINE,
+        )
+        self.assertIsNone(unsafe.search(text))
+
     def test_documented_reference_recovers_40p5_um(self) -> None:
         diameter = self.physics.channel_matched_spot_diameter_m(150.0e-6, 4.0e18)
         self.assertAlmostEqual(diameter * 1.0e6, 40.5, places=12)
@@ -330,7 +353,7 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
 
         iteration = resolved["particle_diagnostic_iteration"]
         self.assertIn(
-            f"plasma_electrons.intervals = {iteration}:{iteration}", serialized
+            f'plasma_electrons.intervals = "{iteration}:{iteration}"', serialized
         )
         self.assertIn("plasma_electrons.dump_last_timestep = 0", serialized)
         self.assertNotIn("plasma_electrons.dump_last_timestep = 1", serialized)
