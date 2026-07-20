@@ -155,6 +155,15 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         self.assertIn("MANDATORY_PARTICLE_AND_ANIMATION_OUTPUTS=1", text)
         self.assertIn("CLEANUP_MANIFEST_GATED=1", text)
         self.assertIn("FULL_CHAIN_NOT_SUBMITTED=1", text)
+        self.assertIn(
+            'audit_root.glob("rebuild_*/rebuild_audit.json")',
+            text,
+        )
+        self.assertIn(
+            'audit_root.glob("resume_preflight_*/resume_preflight_audit.json")',
+            text,
+        )
+        self.assertNotIn("no resume_preflight_audit.json found", text)
         self.assertNotIn("--allow-additional-cases", text)
         self.assertNotIn("run_loop_once", text)
         self.assertNotIn("submit_morbo_chain", text)

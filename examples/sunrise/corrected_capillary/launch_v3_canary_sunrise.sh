@@ -100,8 +100,12 @@ import os
 from pathlib import Path
 
 root = Path(os.environ["ROOT"])
-paths = list((root / "audits").glob("resume_preflight_*/resume_preflight_audit.json"))
-assert paths, "no resume_preflight_audit.json found"
+audit_root = root / "audits"
+paths = [
+    *audit_root.glob("rebuild_*/rebuild_audit.json"),
+    *audit_root.glob("resume_preflight_*/resume_preflight_audit.json"),
+]
+assert paths, "no rebuild or resume ready-for-canary audit found"
 print(max(paths, key=lambda path: (path.stat().st_mtime_ns, str(path))))
 PY
 )"
