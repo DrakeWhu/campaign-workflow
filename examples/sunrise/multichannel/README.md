@@ -245,9 +245,10 @@ python -m campaign_workflow.cli.optimizer_tick \
 
 The 16-point Sobol design is split across the first two iterations:
 `iter_000` contains the reference plus the first eight Sobol points, and
-`iter_001` contains the remaining eight. Later iterations also use batches of
-eight candidates. The chain can therefore keep a nine-task array; task ID 8 is
-a safe no-op after `iter_000`:
+`iter_001` contains the remaining eight. Once the balanced Sobol design is
+complete, MORBO and any extra Sobol fallback use batches of four candidates.
+The chain can keep a nine-task array; task IDs above the materialized batch are
+safe no-ops:
 
 ```bash
 python "${WORKFLOW_ROOT}/examples/sunrise/submit_morbo_chain.py" \
