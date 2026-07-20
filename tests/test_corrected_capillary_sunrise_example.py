@@ -132,6 +132,38 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         )
         self.assertIsNone(unsafe.search(text))
 
+    def test_canary_launcher_is_syntax_checked_and_strictly_scoped(self) -> None:
+        script = EXAMPLE / "launch_v2_canary_sunrise.sh"
+        text = script.read_text(encoding="utf-8")
+        result = subprocess.run(
+            ["bash", "-n", str(script)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2", text)
+        self.assertEqual(text.count("--action submit_iteration"), 2)
+        self.assertEqual(text.count("--array-spec '0-1%2'"), 2)
+        self.assertEqual(text.count("--dry-run"), 1)
+        self.assertEqual(text.count("--execute"), 1)
+        self.assertEqual(text.count("--confirm-cleanup-execute"), 2)
+        self.assertIn("#SBATCH --partition=T12H", text)
+        self.assertIn("#SBATCH --time=12:00:00", text)
+        self.assertIn("MANDATORY_PARTICLE_AND_ANIMATION_OUTPUTS=1", text)
+        self.assertIn("CLEANUP_MANIFEST_GATED=1", text)
+        self.assertIn("FULL_CHAIN_NOT_SUBMITTED=1", text)
+        self.assertNotIn("--allow-additional-cases", text)
+        self.assertNotIn("run_loop_once", text)
+        self.assertNotIn("submit_morbo_chain", text)
+        unsafe = re.compile(
+            r"(^|[;|&()\s])"
+            r"(rm|logout)"
+            r"([;|&()\s]|$)",
+            flags=re.MULTILINE,
+        )
+        self.assertIsNone(unsafe.search(text))
+
     def test_documented_reference_recovers_40p5_um(self) -> None:
         diameter = self.physics.channel_matched_spot_diameter_m(150.0e-6, 4.0e18)
         self.assertAlmostEqual(diameter * 1.0e6, 40.5, places=12)

@@ -202,6 +202,22 @@ match that exact safe checkpoint. It then runs only the corrected PICMI test
 and the two materialized control preflights, leaving optimization state
 byte-for-byte unchanged.
 
+Once either preflight path finishes with `READY_FOR_CANARY=1`, run the
+versioned two-case launcher from the login node:
+
+```bash
+bash --noprofile --norc \
+    "${HOME}/apps/src/campaign-workflow-clpu-adk/examples/sunrise/corrected_capillary/launch_v2_canary_sunrise.sh"
+```
+
+The launcher revalidates the ready checkpoint, creates an exact T12H copy of
+the stock case-cycle submit script, audits `optimizer_tick submit_iteration`
+in dry-run mode, and then submits only case IDs 0 and 1 with array spec
+`0-1%2`. Both particle provenance outputs and both MP4 animations are required
+reduced artifacts. Raw HDF5 cleanup is requested, but it can execute only
+after raw and reduced validation plus the delete-manifest gate succeed. The
+launcher does not submit any later Sobol or MORBO work.
+
 ## Release policy
 
 Do not pre-submit the full 27-iteration chain at bootstrap. Run the two Sobol
