@@ -60,6 +60,9 @@ def build_particle_analysis_argv(
     which = os.environ.get("CAMPAIGN_PARTICLE_WHICH", "exit")
     exit_kind = os.environ.get("CAMPAIGN_PARTICLE_EXIT_KIND", "plateau")
     spectrum_emin_mev = os.environ.get("CAMPAIGN_PARTICLE_SPECTRUM_EMIN_MEV", "1")
+    maximum_target_delta = os.environ.get(
+        "CAMPAIGN_PARTICLE_MAX_TARGET_ITERATION_DELTA", ""
+    ).strip()
     outdir = Path(os.environ.get("CAMPAIGN_PARTICLE_OUTDIR", str(case_dir / "particle_analysis")))
 
     argv = [
@@ -87,6 +90,11 @@ def build_particle_analysis_argv(
         "off",
     }:
         argv.append("--spectrum-log-y")
+
+    if maximum_target_delta:
+        argv.extend(
+            ["--maximum-target-iteration-delta", maximum_target_delta]
+        )
 
     return argv
 

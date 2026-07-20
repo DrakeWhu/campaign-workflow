@@ -3,10 +3,13 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import os
 from pathlib import Path
 import sys
+import tempfile
 import types
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -66,6 +69,18 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         cls.physics = load_input_module()
         cls.campaign = json.loads(
             (EXAMPLE / "campaign.json").read_text(encoding="utf-8")
+        )
+        cls.optimization = json.loads(
+            (EXAMPLE / "optimization.json").read_text(encoding="utf-8")
+        )
+
+    def test_rebuild_uses_a_fresh_root_and_campaign_identity(self) -> None:
+        expected = "clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2"
+        self.assertEqual(self.optimization["optimization_name"], expected)
+        self.assertIn(expected, self.optimization["optimizer"]["optimizer_config"])
+        self.assertTrue(
+            self.optimization["campaign_preparation"]["campaign_name_template"]
+            .startswith(expected)
         )
 
     def test_documented_reference_recovers_40p5_um(self) -> None:
@@ -217,15 +232,88 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         self.assertIn("animation_validation", output_names)
         self.assertTrue(self.campaign["cleanup"]["require_reduced_validated"])
 
-    def test_input_uses_n5_adk_and_final_only_particle_diagnostic(self) -> None:
+    def test_particle_snapshot_is_filtered_and_aligned_with_plateau_exit(self) -> None:
+        resolved = self.physics.resolve_parameters(
+            {
+                "CAP_PLASMA_KIND": "chan",
+                "CAP_LONG_PROFILE": "both",
+                "CAP_PLATEAU_LENGTH_M": "5e-3",
+                "CAP_RADIUS_M": "1.5e-4",
+                "CAP_RMAX_M": "1.8e-4",
+            }
+        )
+        self.assertEqual(resolved["max_steps"], 192000)
+        self.assertEqual(resolved["field_diagnostic_period"], 4086)
+        self.assertEqual(
+            resolved["particle_diagnostic_target_iteration_unaligned"], 128000
+        )
+        self.assertEqual(resolved["particle_diagnostic_iteration"], 126666)
+        self.assertEqual(resolved["particle_diagnostic_intervals"], "126666:126666")
+        self.assertEqual(
+            resolved["particle_diagnostic_iteration"]
+            % resolved["field_diagnostic_period"],
+            0,
+        )
+        self.assertFalse(resolved["particle_diagnostic_dump_last_timestep"])
+        self.assertEqual(resolved["particle_diagnostic_min_energy_MeV"], 5.0)
+        self.assertTrue(resolved["particle_diagnostic_forward_only"])
+        self.assertIn("uz > 0.0", resolved["particle_diagnostic_filter_expression"])
+        self.assertIn(">= 5", resolved["particle_diagnostic_filter_expression"])
+
+    def test_input_uses_n5_adk_and_single_particle_diagnostic(self) -> None:
         text = (EXAMPLE / "input_template.py").read_text(encoding="utf-8")
         self.assertIn('charge_state=resolved["nitrogen_initial_charge_state"]', text)
         self.assertIn('model="ADK"', text)
         self.assertIn('name="preionized_background_electrons"', text)
         self.assertIn('name="nitrogen_ionized_electrons"', text)
         self.assertIn('name="plasma_electrons"', text)
-        self.assertIn("period=0", text)
-        self.assertIn("warpx_dump_last_timestep=True", text)
+        self.assertIn('period=resolved["particle_diagnostic_intervals"]', text)
+        self.assertIn("warpx_plot_filter_function=resolved[", text)
+        self.assertIn("warpx_dump_last_timestep=False", text)
+        self.assertEqual(text.count("warpx_dump_last_timestep=True"), 1)
+
+    def test_warpx_picmi_serializes_exact_filtered_particle_interval(self) -> None:
+        try:
+            import pywarpx  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("pywarpx is only available in the WarpX preflight environment")
+
+        env = {
+            "CAP_CASE_ID": "preflight",
+            "CAP_CASE_NAME": "serialization_preflight",
+            "CAP_PLASMA_KIND": "chan",
+            "CAP_NITROGEN_DOPANT_FRACTION": "0.005",
+            "CAP_RADIUS_M": "1.5e-4",
+            "CAP_RMAX_M": "1.8e-4",
+            "CAP_DRY_RUN": "true",
+        }
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                with mock.patch.dict(os.environ, env, clear=False):
+                    self.physics.main()
+                resolved = json.loads(
+                    Path("resolved_parameters.json").read_text(encoding="utf-8")
+                )
+                serialized = Path("inputs_capillary_serialization_preflight").read_text(
+                    encoding="utf-8"
+                )
+            finally:
+                os.chdir(old_cwd)
+
+        iteration = resolved["particle_diagnostic_iteration"]
+        self.assertIn(
+            f"plasma_electrons.intervals = {iteration}:{iteration}", serialized
+        )
+        self.assertIn("plasma_electrons.dump_last_timestep = 0", serialized)
+        self.assertNotIn("plasma_electrons.dump_last_timestep = 1", serialized)
+        self.assertIn(
+            "plasma_electrons.preionized_background_electrons."
+            "plot_filter_function(t,x,y,z,ux,uy,uz)",
+            serialized,
+        )
+        self.assertIn(">= 5", serialized)
 
     def test_animation_generation_and_decode_validation_precede_cleanup(self) -> None:
         script = (EXAMPLE / "run_case_analysis_sunrise.sh").read_text(
@@ -236,6 +324,8 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         self.assertIn("validate_particle_species_outputs.py", script)
         self.assertIn("preionized_background_electrons", script)
         self.assertIn("nitrogen_ionized_electrons", script)
+        self.assertIn("CAMPAIGN_PARTICLE_MAX_TARGET_ITERATION_DELTA=\"0\"", script)
+        self.assertIn("--resolved-parameters", script)
         self.assertNotIn("--no-plots", script)
         self.assertLess(
             script.index("animate_guiding_fields.py"),

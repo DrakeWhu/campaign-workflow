@@ -39,6 +39,8 @@ python scripts/analyze_case.py \
 export CAMPAIGN_PARTICLE_SPECIES="preionized_background_electrons,nitrogen_ionized_electrons"
 export CAMPAIGN_PARTICLE_WHICH="exit"
 export CAMPAIGN_PARTICLE_EXIT_KIND="plateau"
+export CAMPAIGN_PARTICLE_MAX_TARGET_ITERATION_DELTA="0"
+export CAMPAIGN_PARTICLE_SPECTRUM_EMIN_MEV="5"
 export CAMPAIGN_RUN_PARTICLE_ANALYSIS="always"
 
 python "${WORKFLOW_ROOT}/examples/capillary_guiding/run_particle_analysis_if_available.py" \
@@ -49,6 +51,7 @@ python "${WORKFLOW_ROOT}/examples/capillary_guiding/run_particle_analysis_if_ava
 
 python "${WORKFLOW_ROOT}/examples/sunrise/corrected_capillary/validate_particle_species_outputs.py" \
     --particle-outdir "${CASE_DIR}/particle_analysis" \
+    --resolved-parameters "${CASE_DIR}/resolved_parameters.json" \
     --output "${CASE_DIR}/particle_analysis/species_validation.json" \
     --expected-scope all_electrons \
     --expected-scope preionized_background_electrons \

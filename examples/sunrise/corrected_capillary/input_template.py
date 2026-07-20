@@ -13,6 +13,7 @@ C_LIGHT = 299792458.0
 Q_E = 1.602176634e-19
 M_E = 9.1093837139e-31
 EPSILON_0 = 8.8541878128e-12
+ELECTRON_REST_ENERGY_MEV = 0.51099895
 
 # Carlos's reference point: D=300 um, n0=4e18 cm^-3, matched spot
 # diameter W_M=40.5 um. W_M is diagnostic only; the density uses the direct
@@ -125,6 +126,48 @@ def mixture_density_factors(nitrogen_fraction: float) -> dict[str, float]:
         "initial_charge_balance": hydrogen + 5.0 * nitrogen,
         "maximum_extra_electron": 2.0 * nitrogen,
     }
+
+
+def nearest_periodic_iteration(
+    *,
+    target_iteration: int,
+    period: int,
+    max_steps: int,
+) -> int:
+    """Align a physical target to the nearest regular field-diagnostic frame."""
+
+    target = int(target_iteration)
+    interval = int(period)
+    maximum = int(max_steps)
+    if target <= 0:
+        raise ValueError("target diagnostic iteration must be positive")
+    if interval <= 0:
+        raise ValueError("diagnostic period must be positive")
+    if maximum <= 0 or interval > maximum:
+        raise ValueError("diagnostic period must not exceed max_steps")
+    if target > maximum:
+        raise ValueError(
+            "simulation max_steps does not reach the requested particle target"
+        )
+
+    latest_periodic = (maximum // interval) * interval
+    nearest = ((target + interval // 2) // interval) * interval
+    return min(max(interval, nearest), latest_periodic)
+
+
+def build_particle_diagnostic_filter_expression(
+    *,
+    minimum_energy_mev: float,
+    forward_only: bool,
+) -> str:
+    threshold = float(minimum_energy_mev)
+    if not math.isfinite(threshold) or threshold < 0.0:
+        raise ValueError("particle diagnostic energy threshold must be non-negative")
+    energy = (
+        f"((sqrt(1.0+ux*ux+uy*uy+uz*uz)-1.0)*"
+        f"{ELECTRON_REST_ENERGY_MEV:.8g} >= {threshold:.12g})"
+    )
+    return f"(uz > 0.0)*{energy}" if forward_only else energy
 
 
 def build_longitudinal_expression(
@@ -368,6 +411,33 @@ def resolve_parameters(environ: Mapping[str, str] | None = None) -> dict[str, An
         "CAP_FIELD_DIAG_PERIOD",
         int(math.ceil(max_steps / (target_field_frames - 1))),
     )
+    plateau_exit_distance_m = (
+        longitudinal["plateau_end_z"] - longitudinal["plasma_start_z"]
+    )
+    particle_target_step = int(
+        math.ceil(baseline_steps * plateau_exit_distance_m / 5.0e-3)
+    )
+    particle_diagnostic_iteration = nearest_periodic_iteration(
+        target_iteration=particle_target_step,
+        period=field_period,
+        max_steps=max_steps,
+    )
+    particle_diagnostic_intervals = (
+        f"{particle_diagnostic_iteration}:{particle_diagnostic_iteration}"
+    )
+    particle_min_energy_mev = env_float(
+        env, "CAP_PARTICLE_DIAG_MIN_ENERGY_MEV", 5.0
+    )
+    particle_forward_only = env_bool(
+        env, "CAP_PARTICLE_DIAG_FORWARD_ONLY", True
+    )
+    particle_filter_expression = build_particle_diagnostic_filter_expression(
+        minimum_energy_mev=particle_min_energy_mev,
+        forward_only=particle_forward_only,
+    )
+    particle_aligned_distance_m = (
+        particle_diagnostic_iteration * 5.0e-3 / baseline_steps
+    )
 
     te_ev = env_float(env, "CAP_TE_EV", 5.0)
     use_te = env_bool(env, "CAP_USE_TE", True)
@@ -380,8 +450,8 @@ def resolve_parameters(environ: Mapping[str, str] | None = None) -> dict[str, An
     ]
 
     resolved = {
-        "schema_version": 1,
-        "physics_model_id": "clpu_carlos_plateau_quasiparabolic_n5_adk_v3",
+        "schema_version": 2,
+        "physics_model_id": "clpu_carlos_plateau_quasiparabolic_n5_adk_v4",
         "case_id": case_id,
         "case_name": case_name,
         "laser_case": laser_case,
@@ -444,9 +514,26 @@ def resolve_parameters(environ: Mapping[str, str] | None = None) -> dict[str, An
             "n_azimuthal_modes": n_modes,
         },
         "max_steps": max_steps,
+        "baseline_steps_per_5mm": baseline_steps,
         "field_diagnostic_period": field_period,
         "target_field_frames": target_field_frames,
-        "particle_diagnostic_policy": "final_timestep_only",
+        "particle_diagnostic_policy": "single_plateau_exit_field_aligned_filtered_v1",
+        "particle_diagnostic_target": "plateau_exit",
+        "particle_diagnostic_target_distance_m": plateau_exit_distance_m,
+        "particle_diagnostic_target_iteration_unaligned": particle_target_step,
+        "particle_diagnostic_iteration": particle_diagnostic_iteration,
+        "particle_diagnostic_intervals": particle_diagnostic_intervals,
+        "particle_diagnostic_aligned_distance_m": particle_aligned_distance_m,
+        "particle_diagnostic_alignment_error_steps": (
+            particle_diagnostic_iteration - particle_target_step
+        ),
+        "particle_diagnostic_alignment_error_m": (
+            particle_aligned_distance_m - plateau_exit_distance_m
+        ),
+        "particle_diagnostic_min_energy_MeV": particle_min_energy_mev,
+        "particle_diagnostic_forward_only": particle_forward_only,
+        "particle_diagnostic_filter_expression": particle_filter_expression,
+        "particle_diagnostic_dump_last_timestep": False,
         "electron_temperature_eV": te_ev if use_te else 0.0,
         "electron_thermal_speed_m_s": electron_thermal_speed_m_s,
         "macroparticles_per_cell_r_theta_z": ppc,
@@ -650,13 +737,16 @@ def main() -> None:
         sim.add_diagnostic(
             picmi.ParticleDiagnostic(
                 name="plasma_electrons",
-                period=0,
+                period=resolved["particle_diagnostic_intervals"],
                 species=electron_species,
                 data_list=["position", "momentum", "weighting"],
                 write_dir="diags",
                 warpx_format="openpmd",
                 warpx_openpmd_backend="h5",
-                warpx_dump_last_timestep=True,
+                warpx_plot_filter_function=resolved[
+                    "particle_diagnostic_filter_expression"
+                ],
+                warpx_dump_last_timestep=False,
             )
         )
 

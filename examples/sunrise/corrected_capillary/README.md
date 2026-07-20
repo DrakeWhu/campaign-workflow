@@ -74,6 +74,22 @@ scopes, with the scope embedded in both filename and plot title. A campaign
 validator decodes all 21 PNGs, checks the three CSV scope sets and refuses
 cleanup if any product is absent or inconsistent.
 
+The particle diagnostic is deliberately **not** a final-timestep dump. For
+each case the input maps the physical plateau exit (front ramp plus plateau)
+to the nearest regular field-diagnostic iteration and writes exactly that one
+particle iteration. WarpX filters the dump in situ to forward electrons with
+kinetic energy at least 5 MeV, for both electron species, and
+`dump_last_timestep` is disabled. The resolved target, aligned iteration,
+interval, filter and alignment error are persisted in
+`resolved_parameters.json`.
+
+The analysis independently derives the plateau exit from those resolved
+longitudinal boundaries and requires zero iteration mismatch for this
+campaign. Reduced validation also requires a single available particle
+iteration equal to the resolved one. A genuinely empty, correctly timed dump
+is valid physics; a distant or extra final dump is invalid provenance and
+blocks cleanup.
+
 ## Sampling and objective schedule
 
 The supplied optimizer configuration uses:
@@ -111,7 +127,7 @@ Expected checkouts:
 ```bash
 export WORKFLOW_ROOT="${HOME}/apps/src/campaign-workflow"
 export OPTIMIZER_ROOT="${HOME}/apps/src/campaign-optimizer"
-export OPT_ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50"
+export OPT_ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2"
 
 mkdir -p "${OPT_ROOT}/template_campaign" \
          "${OPT_ROOT}/iterations" \
@@ -140,6 +156,11 @@ python -m campaign_optimizer.cli.run_iteration \
     --build-candidate-batch \
     --build-report
 ```
+
+The previous root without the `_v2` suffix is an immutable audit artifact and
+must not be reset or reused. Rebuilding iteration 0 with the unchanged seed
+must reproduce the three controls and the same 32 Sobol parameter points in a
+fresh root before any canary is submitted.
 
 Before materialization, audit these invariants:
 

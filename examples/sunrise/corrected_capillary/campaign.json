@@ -39,6 +39,8 @@
       "CAP_LASER_SPOT_DEFINITION": "diameter_1e2_intensity",
       "CAP_MAX_NITROGEN_DOPANT_FRACTION": "0.01",
       "CAP_TARGET_FIELD_FRAMES": "48",
+      "CAP_PARTICLE_DIAG_MIN_ENERGY_MEV": "5",
+      "CAP_PARTICLE_DIAG_FORWARD_ONLY": "true",
       "CAP_MAX_RADIAL_CELL_M": "1.5e-6"
     }
   },
@@ -130,6 +132,13 @@
         "min_rows": 3,
         "required_columns": [
           "species_scope",
+          "selection_mode",
+          "target_guiding_iteration",
+          "selected_particle_iteration",
+          "target_iteration_delta",
+          "maximum_target_iteration_delta",
+          "target_iteration_alignment_status",
+          "n_available_particle_iterations",
           "soft50_schema_version",
           "charge_soft50_pC",
           "n_effective_soft50",

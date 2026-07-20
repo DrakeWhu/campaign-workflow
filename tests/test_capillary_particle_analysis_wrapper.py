@@ -51,6 +51,7 @@ class CapillaryParticleAnalysisWrapperTests(unittest.TestCase):
                 parser.add_argument("--overwrite", action="store_true")
                 parser.add_argument("--spectrum-emin-mev", required=True)
                 parser.add_argument("--spectrum-log-y", action="store_true")
+                parser.add_argument("--maximum-target-iteration-delta")
                 args = parser.parse_args()
 
                 outdir = Path(args.outdir)
@@ -111,12 +112,17 @@ class CapillaryParticleAnalysisWrapperTests(unittest.TestCase):
 
     def test_builds_expected_particle_analysis_command(self) -> None:
         diag_dir = self.case_dir / "diags" / "plasma_electrons"
-        argv = build_particle_analysis_argv(
-            python_executable="python",
-            analysis_root=self.analysis_root,
-            case_dir=self.case_dir,
-            diag_dir=diag_dir,
-        )
+        with mock.patch.dict(
+            os.environ,
+            {"CAMPAIGN_PARTICLE_MAX_TARGET_ITERATION_DELTA": "0"},
+            clear=False,
+        ):
+            argv = build_particle_analysis_argv(
+                python_executable="python",
+                analysis_root=self.analysis_root,
+                case_dir=self.case_dir,
+                diag_dir=diag_dir,
+            )
 
         self.assertIn("--diag", argv)
         self.assertIn(str(diag_dir), argv)
@@ -131,6 +137,9 @@ class CapillaryParticleAnalysisWrapperTests(unittest.TestCase):
         self.assertIn("--spectrum-emin-mev", argv)
         self.assertIn("1", argv)
         self.assertIn("--spectrum-log-y", argv)
+        self.assertIn("--maximum-target-iteration-delta", argv)
+        delta_index = argv.index("--maximum-target-iteration-delta")
+        self.assertEqual(argv[delta_index + 1], "0")
 
     def test_guiding_wrapper_still_runs_guiding_before_particle_phase(self) -> None:
         wrapper = Path("examples/capillary_guiding/run_guiding_case_analysis_sunrise.sh")
