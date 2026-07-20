@@ -72,7 +72,11 @@ class CorrectedCapillaryParticleSpeciesValidationTests(unittest.TestCase):
                     "particle_diagnostic_target_distance_m": 10.0e-3,
                     "particle_diagnostic_target_iteration_unaligned": 40,
                     "particle_diagnostic_alignment_error_steps": 2,
-                    "baseline_steps_per_5mm": 20,
+                    "particle_diagnostic_aligned_distance_m": 10.5e-3,
+                    "moving_window_step_distance_m": 0.25e-3,
+                    "time_step_model": (
+                        "WarpX_CylindricalYeeAlgorithm_ComputeMaxDt"
+                    ),
                     "field_diagnostic_period": 6,
                     "plasma_start_z": 0.0,
                     "plateau_end_z": 10.0e-3,

@@ -48,6 +48,16 @@ aperture, as requested by Carlos; the radial multiplier is never applied there.
 0.55--1.46 um/cell across D=150--500 um without increasing the radial cell
 count. Cases above 1.5 um/cell are rejected.
 
+The number of steps is derived separately for every materialized grid from
+WarpX's multimode cylindrical-Yee CFL expression. For the reference grid
+(`rmax=180 um`, `nr=192`, `nz=1536`, two azimuthal modes, `cfl=1`) this gives
+`c dt = 0.1640085 um`, about 30,487 steps per 5 mm. The old empirical value of
+64,000 steps per 5 mm is rejected explicitly: it placed the particle dump
+well downstream of the plateau exit and propagated the moving window about
+twice as far as intended. Both `max_steps` and the single particle-diagnostic
+iteration now use the same grid-derived `c dt` recorded in
+`resolved_parameters.json`.
+
 `NITROGEN_DOPANT_FRACTION` is the fraction of atomic nuclei that are nitrogen;
 because both gases are diatomic, it is also the N2 molecular fraction in an
 H2/N2 mixture. The initial free-electron profile is held fixed. Hydrogen starts
@@ -127,7 +137,7 @@ Expected checkouts:
 ```bash
 export WORKFLOW_ROOT="${HOME}/apps/src/campaign-workflow"
 export OPTIMIZER_ROOT="${HOME}/apps/src/campaign-optimizer"
-export OPT_ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2"
+export OPT_ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3"
 
 mkdir -p "${OPT_ROOT}/template_campaign" \
          "${OPT_ROOT}/iterations" \
@@ -157,8 +167,9 @@ python -m campaign_optimizer.cli.run_iteration \
     --build-report
 ```
 
-The previous root without the `_v2` suffix is an immutable audit artifact and
-must not be reset or reused. Rebuilding iteration 0 with the unchanged seed
+The `_v2` root is an immutable audit artifact containing the two canaries that
+exposed the erroneous empirical step conversion. It must not be reset, reused
+or cleaned by the v3 bootstrap. Rebuilding iteration 0 with the unchanged seed
 must reproduce the three controls and the same 32 Sobol parameter points in a
 fresh root before any canary is submitted.
 
@@ -186,7 +197,7 @@ Use the existing `prepare_batch_campaign`, `materialize_cases` and
 with this template and output root. None of those commands submits a job.
 
 On SUNRISE, after checking out the reviewed workflow commit in the isolated
-ADK worktree, `rebuild_v2_before_canary_sunrise.sh` performs this complete
+ADK worktree, `rebuild_v3_after_cfl_fix_sunrise.sh` performs this complete
 rebuild. It updates the other two isolated ADK worktrees to their reviewed
 commits, runs all three test suites, proves that the iteration-0 batch is
 byte-identical to the previous root, materializes all 35 cases, and runs PICMI
@@ -196,7 +207,7 @@ that no HDF5 files or submitted cases exist.
 
 If the rebuild has already completed materialization but stops during the
 PICMI serialization gate, do not delete or recreate the root.
-`resume_v2_preflight_after_materialization_sunrise.sh` first proves that the
+`resume_v3_preflight_after_materialization_sunrise.sh` first proves that the
 batch, 35 `Created` states, optimization state and absence of HDF5/submissions
 match that exact safe checkpoint. It then runs only the corrected PICMI test
 and the two materialized control preflights, leaving optimization state
@@ -207,13 +218,13 @@ versioned two-case launcher from the login node:
 
 ```bash
 bash --noprofile --norc \
-    "${HOME}/apps/src/campaign-workflow-clpu-adk/examples/sunrise/corrected_capillary/launch_v2_canary_sunrise.sh"
+    "${HOME}/apps/src/campaign-workflow-clpu-adk/examples/sunrise/corrected_capillary/launch_v3_canary_sunrise.sh"
 ```
 
 The launcher revalidates the ready checkpoint, creates an exact T12H copy of
 the stock case-cycle submit script, audits `optimizer_tick submit_iteration`
 in dry-run mode, and then submits only case IDs 0 and 1 with array spec
-`0-1%2`. Both particle provenance outputs and both MP4 animations are required
+`0-1` with no array throttle. Both particle provenance outputs and both MP4 animations are required
 reduced artifacts. Raw HDF5 cleanup is requested, but it can execute only
 after raw and reduced validation plus the delete-manifest gate succeed. The
 launcher does not submit any later Sobol or MORBO work.
@@ -223,7 +234,7 @@ anything else:
 
 ```bash
 bash --noprofile --norc \
-    "${HOME}/apps/src/campaign-workflow-clpu-adk/examples/sunrise/corrected_capillary/audit_v2_canary_results_sunrise.sh"
+    "${HOME}/apps/src/campaign-workflow-clpu-adk/examples/sunrise/corrected_capillary/audit_v3_canary_results_sunrise.sh"
 ```
 
 This audit is read-only apart from its timestamped audit log. It requires both
@@ -239,7 +250,7 @@ the reviewed finite chain:
 
 ```bash
 bash --noprofile --norc \
-    "${HOME}/apps/src/campaign-workflow-clpu-adk/examples/sunrise/corrected_capillary/launch_v2_rest_and_chain_sunrise.sh"
+    "${HOME}/apps/src/campaign-workflow-clpu-adk/examples/sunrise/corrected_capillary/launch_v3_rest_and_chain_sunrise.sh"
 ```
 
 The resume launcher never resubmits control IDs 0 and 1. It submits IDs 2--34,

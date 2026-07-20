@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2"
+ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3"
 ITER="${ROOT}/iterations/iter_000"
 
 GA="${HOME}/apps/src/guiding_analysis_module-clpu-adk"
@@ -9,8 +9,7 @@ WF="${HOME}/apps/src/campaign-workflow-clpu-adk"
 OPT="${HOME}/apps/src/campaign-optimizer-clpu-adk"
 
 GA_SHA="d8a42b79840935e829020ebb86dfc3bc4e1a1936"
-PREFLIGHT_WF_SHA="48ad6ca61b56637211667f7c8745f6cf228e9c0e"
-OPT_SHA="fee95b96ee9697bded0ac261003ee87cf1c6260b"
+OPT_SHA="9fc7e612f00a5ca4ee1b85de62167c6690546058"
 
 ORIG_GA="${HOME}/apps/src/guiding_analysis_module"
 ORIG_WF="${HOME}/apps/src/campaign-workflow"
@@ -85,23 +84,6 @@ echo "=== Fuentes ADK y aislamiento multichannel ==="
 [[ -z "$(${GIT_BIN} -C "${OPT}" status --porcelain)" ]]
 
 WF_SHA="$(${GIT_BIN} -C "${WF}" rev-parse HEAD)"
-${GIT_BIN} -C "${WF}" merge-base --is-ancestor "${PREFLIGHT_WF_SHA}" "${WF_SHA}"
-
-mapfile -t wf_changed_paths < <(
-    ${GIT_BIN} -C "${WF}" diff --name-only "${PREFLIGHT_WF_SHA}..${WF_SHA}"
-)
-for changed_path in "${wf_changed_paths[@]}"; do
-    case "${changed_path}" in
-        examples/sunrise/corrected_capillary/README.md|\
-        examples/sunrise/corrected_capillary/launch_v2_canary_sunrise.sh|\
-        tests/test_corrected_capillary_sunrise_example.py)
-            ;;
-        *)
-            echo "ERROR: cambio operativo posterior al preflight: ${changed_path}"
-            exit 12
-            ;;
-    esac
-done
 
 orig_ga_head="$(${GIT_BIN} -C "${ORIG_GA}" rev-parse HEAD)"
 orig_wf_head="$(${GIT_BIN} -C "${ORIG_WF}" rev-parse HEAD)"
@@ -110,7 +92,7 @@ orig_ga_status="$(${GIT_BIN} -C "${ORIG_GA}" status --porcelain)"
 orig_wf_status="$(${GIT_BIN} -C "${ORIG_WF}" status --porcelain)"
 orig_opt_status="$(${GIT_BIN} -C "${ORIG_OPT}" status --porcelain)"
 
-export ROOT ITER AUDIT GA_SHA PREFLIGHT_WF_SHA OPT_SHA WF_SHA
+export ROOT ITER AUDIT GA_SHA OPT_SHA WF_SHA
 
 PREFLIGHT_AUDIT="$(
 "${PYTHON_BIN}" - <<'PY'
@@ -149,7 +131,7 @@ assert preflight["submitted_case_count"] == 0
 assert preflight["hdf5_file_count"] == 0
 assert preflight["source_commits"] == {
     "guiding_analysis_module": os.environ["GA_SHA"],
-    "campaign_workflow": os.environ["PREFLIGHT_WF_SHA"],
+    "campaign_workflow": os.environ["WF_SHA"],
     "campaign_optimizer": os.environ["OPT_SHA"],
 }
 
@@ -218,8 +200,14 @@ for row, expected_fraction in expected_controls:
     assert resolved["particle_diagnostic_policy"] == (
         "single_plateau_exit_field_aligned_filtered_v1"
     )
-    assert resolved["particle_diagnostic_iteration"] == 126666
-    assert resolved["particle_diagnostic_intervals"] == "126666:126666"
+    assert resolved["schema_version"] == 3
+    assert resolved["physics_model_id"] == (
+        "clpu_carlos_plateau_quasiparabolic_n5_adk_v5_grid_cfl"
+    )
+    assert resolved["max_steps"] == 91459
+    assert resolved["field_diagnostic_period"] == 1946
+    assert resolved["particle_diagnostic_iteration"] == 60326
+    assert resolved["particle_diagnostic_intervals"] == "60326:60326"
     assert resolved["particle_diagnostic_dump_last_timestep"] is False
     assert resolved["particle_diagnostic_min_energy_MeV"] == 5.0
     assert resolved["particle_diagnostic_forward_only"] is True
@@ -295,11 +283,11 @@ echo "=== optimizer_tick: dry-run exacto del canario ==="
     --optimization-root "${ROOT}" \
     --iteration 0 \
     --action submit_iteration \
-    --array-spec '0-1%2' \
+    --array-spec '0-1' \
     --submit-script "${LOCAL_SUBMIT}" \
     --workflow-root "${WF}" \
     --workflow-env "${WF_ENV}" \
-    --job-name "clpu4v2_adk_i000_c01" \
+    --job-name "clpu4v3_adk_i000_c01" \
     --case-runner "${RUNNER}" \
     --confirm-cleanup-execute \
     --dry-run \
@@ -326,7 +314,7 @@ assert not blocked, blocked
 
 plan = doc["submit_plan"]
 assert plan["iteration"] == 0
-assert plan["array_spec"] == "0-1%2"
+assert plan["array_spec"] == "0-1"
 assert plan["submitted_case_ids"] == [0, 1]
 assert plan["submitted_case_count"] == 2
 assert plan["additional_submission"] is False
@@ -338,8 +326,8 @@ assert os.path.samefile(plan["case_runner"], os.environ["RUNNER"])
 
 command = plan["submit_command"]
 assert command[0] == "sbatch"
-assert "--array=0-1%2" in command
-assert "--job-name=clpu4v2_adk_i000_c01" in command
+assert "--array=0-1" in command
+assert "--job-name=clpu4v3_adk_i000_c01" in command
 assert any("CONFIRM_CLEANUP_EXECUTE=1" in item for item in command)
 
 print("DRY_RUN_GUARDS_OK=1")
@@ -356,11 +344,11 @@ SUBMISSION_PHASE_STARTED=1
     --optimization-root "${ROOT}" \
     --iteration 0 \
     --action submit_iteration \
-    --array-spec '0-1%2' \
+    --array-spec '0-1' \
     --submit-script "${LOCAL_SUBMIT}" \
     --workflow-root "${WF}" \
     --workflow-env "${WF_ENV}" \
-    --job-name "clpu4v2_adk_i000_c01" \
+    --job-name "clpu4v3_adk_i000_c01" \
     --case-runner "${RUNNER}" \
     --confirm-cleanup-execute \
     --execute \
@@ -394,7 +382,7 @@ assert item["submitted"] is True
 assert item["submitted_case_ids"] == [0, 1]
 assert item["submitted_case_count"] == 2
 assert item["array_spec"] == "0-1"
-assert item["array_specs"][-1] == "0-1%2"
+assert item["array_specs"][-1] == "0-1"
 assert item["confirm_cleanup_execute"] is True
 assert str(result["job_id"]) in item["slurm_job_ids"]
 print(result["job_id"])
@@ -432,7 +420,7 @@ summary = {
     "root": os.environ["ROOT"],
     "iteration": 0,
     "case_ids": [0, 1],
-    "array_spec": "0-1%2",
+    "array_spec": "0-1",
     "slurm_job_id": os.environ["JOB_ID"],
     "partition": "T12H",
     "walltime": "12:00:00",
@@ -462,6 +450,7 @@ echo "CANARY_CASES=0,1"
 echo "CANARY_JOB_ID=${JOB_ID}"
 echo "PARTITION=T12H"
 echo "WALLTIME=12:00:00"
+echo "NO_ARRAY_THROTTLE=1"
 echo "CLEANUP_AFTER_REQUIRED_OUTPUT_VALIDATION=1"
 echo "FULL_CHAIN_NOT_SUBMITTED=1"
 echo "MULTICHANNEL_BASELINE_PRESERVED=1"

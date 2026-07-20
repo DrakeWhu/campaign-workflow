@@ -34,6 +34,7 @@ LASER_CASES = {
 }
 
 REQUIRED_CONVENTION_ACK = "clpu_spot_diameter_and_30fs_intensity_fwhm_v1"
+RZ_YEE_MULTIMODE_ALPHA = (0.2105, 1.0, 3.5234, 8.5104, 15.5059, 24.5037)
 
 
 def env_float(
@@ -153,6 +154,60 @@ def nearest_periodic_iteration(
     latest_periodic = (maximum // interval) * interval
     nearest = ((target + interval // 2) // interval) * interval
     return min(max(interval, nearest), latest_periodic)
+
+
+def cylindrical_yee_timestep(
+    *,
+    radial_cell_m: float,
+    longitudinal_cell_m: float,
+    n_azimuthal_modes: int,
+    cfl: float,
+) -> tuple[float, float]:
+    """Mirror WarpX's CFL timestep for the multimode RZ Yee solver.
+
+    WarpX ``CylindricalYeeAlgorithm::ComputeMaxDt`` uses
+
+    ``dt = cfl / (c * sqrt((1 + alpha_m) / dr**2 + 1 / dz**2))``.
+
+    Returning both ``dt`` and ``c*dt`` keeps all distance-to-iteration
+    conversions tied to the actual moving-window displacement per step.
+    """
+
+    dr = float(radial_cell_m)
+    dz = float(longitudinal_cell_m)
+    modes = int(n_azimuthal_modes)
+    cfl_value = float(cfl)
+    if not math.isfinite(dr) or dr <= 0.0:
+        raise ValueError("radial_cell_m must be finite and positive")
+    if not math.isfinite(dz) or dz <= 0.0:
+        raise ValueError("longitudinal_cell_m must be finite and positive")
+    if modes <= 0:
+        raise ValueError("n_azimuthal_modes must be positive")
+    if not math.isfinite(cfl_value) or not 0.0 < cfl_value <= 1.0:
+        raise ValueError("cfl must be finite and within (0, 1]")
+
+    if modes <= len(RZ_YEE_MULTIMODE_ALPHA):
+        alpha = RZ_YEE_MULTIMODE_ALPHA[modes - 1]
+    else:
+        alpha = (modes - 1.0) ** 2 - 0.4
+
+    moving_window_step_distance_m = cfl_value / math.sqrt(
+        (1.0 + alpha) / dr**2 + 1.0 / dz**2
+    )
+    timestep_s = moving_window_step_distance_m / C_LIGHT
+    return timestep_s, moving_window_step_distance_m
+
+
+def steps_for_distance(distance_m: float, moving_window_step_distance_m: float) -> int:
+    distance = float(distance_m)
+    step_distance = float(moving_window_step_distance_m)
+    if not math.isfinite(distance) or distance <= 0.0:
+        raise ValueError("distance_m must be finite and positive")
+    if not math.isfinite(step_distance) or step_distance <= 0.0:
+        raise ValueError(
+            "moving_window_step_distance_m must be finite and positive"
+        )
+    return int(math.ceil(distance / step_distance))
 
 
 def build_particle_diagnostic_filter_expression(
@@ -394,14 +449,31 @@ def resolve_parameters(environ: Mapping[str, str] | None = None) -> dict[str, An
     if nr % blocking_factor != 0:
         raise ValueError("CAP_NR must be divisible by CAP_BLOCKING_FACTOR")
     radial_cell_m = rmax_m / nr
+    longitudinal_cell_m = (zmax_m - zmin_m) / nz
     if radial_cell_m > env_float(env, "CAP_MAX_RADIAL_CELL_M", 1.5e-6):
         raise ValueError("radial cell size exceeds CAP_MAX_RADIAL_CELL_M")
 
     total_profile_length_m = (
         longitudinal["plasma_end_z"] - longitudinal["plasma_start_z"]
     )
-    baseline_steps = env_int(env, "CAP_BASELINE_STEPS_PER_5MM", 64000)
-    default_steps = int(math.ceil(baseline_steps * total_profile_length_m / 5.0e-3))
+    if "CAP_BASELINE_STEPS_PER_5MM" in env:
+        raise ValueError(
+            "CAP_BASELINE_STEPS_PER_5MM is no longer supported; the RZ Yee "
+            "timestep is derived from the materialized grid and CFL"
+        )
+    n_modes = env_int(env, "CAP_NMODES", 2)
+    cfl = env_float(env, "CAP_CFL", 1.0)
+    timestep_s, moving_window_step_distance_m = cylindrical_yee_timestep(
+        radial_cell_m=radial_cell_m,
+        longitudinal_cell_m=longitudinal_cell_m,
+        n_azimuthal_modes=n_modes,
+        cfl=cfl,
+    )
+    steps_per_5mm = steps_for_distance(5.0e-3, moving_window_step_distance_m)
+    default_steps = steps_for_distance(
+        total_profile_length_m,
+        moving_window_step_distance_m,
+    )
     max_steps = env_int(env, "CAP_MAX_STEPS", default_steps)
     target_field_frames = env_int(env, "CAP_TARGET_FIELD_FRAMES", 48)
     if max_steps <= 0 or target_field_frames < 2:
@@ -414,8 +486,9 @@ def resolve_parameters(environ: Mapping[str, str] | None = None) -> dict[str, An
     plateau_exit_distance_m = (
         longitudinal["plateau_end_z"] - longitudinal["plasma_start_z"]
     )
-    particle_target_step = int(
-        math.ceil(baseline_steps * plateau_exit_distance_m / 5.0e-3)
+    particle_target_step = steps_for_distance(
+        plateau_exit_distance_m,
+        moving_window_step_distance_m,
     )
     particle_diagnostic_iteration = nearest_periodic_iteration(
         target_iteration=particle_target_step,
@@ -436,13 +509,12 @@ def resolve_parameters(environ: Mapping[str, str] | None = None) -> dict[str, An
         forward_only=particle_forward_only,
     )
     particle_aligned_distance_m = (
-        particle_diagnostic_iteration * 5.0e-3 / baseline_steps
+        particle_diagnostic_iteration * moving_window_step_distance_m
     )
 
     te_ev = env_float(env, "CAP_TE_EV", 5.0)
     use_te = env_bool(env, "CAP_USE_TE", True)
     electron_thermal_speed_m_s = math.sqrt(te_ev * Q_E / M_E) if use_te else 0.0
-    n_modes = env_int(env, "CAP_NMODES", 2)
     ppc = [
         env_int(env, "CAP_PPC_R", 1),
         env_int(env, "CAP_PPC_THETA", max(2 * n_modes, 4)),
@@ -450,8 +522,8 @@ def resolve_parameters(environ: Mapping[str, str] | None = None) -> dict[str, An
     ]
 
     resolved = {
-        "schema_version": 2,
-        "physics_model_id": "clpu_carlos_plateau_quasiparabolic_n5_adk_v4",
+        "schema_version": 3,
+        "physics_model_id": "clpu_carlos_plateau_quasiparabolic_n5_adk_v5_grid_cfl",
         "case_id": case_id,
         "case_name": case_name,
         "laser_case": laser_case,
@@ -509,12 +581,19 @@ def resolve_parameters(environ: Mapping[str, str] | None = None) -> dict[str, An
             "zmin_m": zmin_m,
             "zmax_m": zmax_m,
             "radial_cell_m": radial_cell_m,
+            "longitudinal_cell_m": longitudinal_cell_m,
             "blocking_factor": blocking_factor,
             "max_grid_size": max_grid_size,
             "n_azimuthal_modes": n_modes,
         },
         "max_steps": max_steps,
-        "baseline_steps_per_5mm": baseline_steps,
+        "max_steps_grid_cfl_derived": default_steps,
+        "steps_per_5mm_grid_cfl_ceil": steps_per_5mm,
+        "time_step_model": "WarpX_CylindricalYeeAlgorithm_ComputeMaxDt",
+        "cfl": cfl,
+        "time_step_s": timestep_s,
+        "moving_window_velocity_m_s": C_LIGHT,
+        "moving_window_step_distance_m": moving_window_step_distance_m,
         "field_diagnostic_period": field_period,
         "target_field_frames": target_field_frames,
         "particle_diagnostic_policy": "single_plateau_exit_field_aligned_filtered_v1",
@@ -570,7 +649,7 @@ def main() -> None:
     solver = picmi.ElectromagneticSolver(
         grid=grid,
         method="Yee",
-        cfl=1.0,
+        cfl=resolved["cfl"],
         divE_cleaning=0,
     )
     sim = picmi.Simulation(

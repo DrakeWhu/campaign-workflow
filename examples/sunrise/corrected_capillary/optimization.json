@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "optimization_name": "clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2",
+  "optimization_name": "clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3",
   "optimizer": {
     "working_directory": "/gpfs/home/jrodriguez/apps/src/campaign-optimizer",
     "env_script": "/gpfs/home/jrodriguez/apps/env/campaign-optimizer.sh",
@@ -15,13 +15,13 @@
       "--build-candidate-batch",
       "--build-report"
     ],
-    "optimizer_config": "/gpfs/home/jrodriguez/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2/optimizer.json"
+    "optimizer_config": "/gpfs/home/jrodriguez/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3/optimizer.json"
   },
   "campaign_preparation": {
     "template_campaign_root": "template_campaign",
     "iterations_dir": "iterations",
     "optimizer_runs_dir": "optimizer_runs",
-    "campaign_name_template": "clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2_iter_{next_iteration:03d}",
+    "campaign_name_template": "clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3_iter_{next_iteration:03d}",
     "materialize_after_prepare": true,
     "init_case_states_after_materialize": true
   },

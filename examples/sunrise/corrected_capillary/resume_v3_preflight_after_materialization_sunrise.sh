@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-OLD_ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50"
-ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2"
+OLD_ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2"
+ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3"
 ITER="${ROOT}/iterations/iter_000"
 
 GA="${HOME}/apps/src/guiding_analysis_module-clpu-adk"
@@ -10,7 +10,7 @@ WF="${HOME}/apps/src/campaign-workflow-clpu-adk"
 OPT="${HOME}/apps/src/campaign-optimizer-clpu-adk"
 
 GA_SHA="d8a42b79840935e829020ebb86dfc3bc4e1a1936"
-OPT_SHA="fee95b96ee9697bded0ac261003ee87cf1c6260b"
+OPT_SHA="9fc7e612f00a5ca4ee1b85de62167c6690546058"
 
 ORIG_GA="${HOME}/apps/src/guiding_analysis_module"
 ORIG_WF="${HOME}/apps/src/campaign-workflow"
@@ -225,9 +225,18 @@ for row, expected_fraction in zip(rows[:2], [0.0, 0.005]):
     assert resolved["particle_diagnostic_target_distance_m"] == (
         resolved["plateau_end_z"] - resolved["plasma_start_z"]
     )
-    assert resolved["particle_diagnostic_target_iteration_unaligned"] == 128000
-    assert resolved["particle_diagnostic_iteration"] == 126666
-    assert resolved["particle_diagnostic_intervals"] == "126666:126666"
+    assert resolved["schema_version"] == 3
+    assert resolved["physics_model_id"] == (
+        "clpu_carlos_plateau_quasiparabolic_n5_adk_v5_grid_cfl"
+    )
+    assert resolved["time_step_model"] == (
+        "WarpX_CylindricalYeeAlgorithm_ComputeMaxDt"
+    )
+    assert resolved["max_steps"] == 91459
+    assert resolved["field_diagnostic_period"] == 1946
+    assert resolved["particle_diagnostic_target_iteration_unaligned"] == 60973
+    assert resolved["particle_diagnostic_iteration"] == 60326
+    assert resolved["particle_diagnostic_intervals"] == "60326:60326"
     assert resolved["particle_diagnostic_iteration"] % resolved["field_diagnostic_period"] == 0
     assert resolved["particle_diagnostic_alignment_error_steps"] == -1334
     assert resolved["particle_diagnostic_dump_last_timestep"] is False
@@ -236,7 +245,7 @@ for row, expected_fraction in zip(rows[:2], [0.0, 0.005]):
     assert resolved["particle_diagnostic_filter_expression"] == expected_filter
     assert resolved["particle_diagnostic_iteration"] != resolved["max_steps"]
 
-    assert 'plasma_electrons.intervals = "126666:126666"' in serialized
+    assert 'plasma_electrons.intervals = "60326:60326"' in serialized
     assert "plasma_electrons.dump_last_timestep = 0" in serialized
     assert "plasma_electrons.dump_last_timestep = 1" not in serialized
     for species in [

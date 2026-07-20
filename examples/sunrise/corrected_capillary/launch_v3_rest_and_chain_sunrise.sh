@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2"
+ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3"
 ITER="${ROOT}/iterations/iter_000"
 
 GA="${HOME}/apps/src/guiding_analysis_module-clpu-adk"
@@ -9,8 +9,7 @@ WF="${HOME}/apps/src/campaign-workflow-clpu-adk"
 OPT="${HOME}/apps/src/campaign-optimizer-clpu-adk"
 
 GA_SHA="d8a42b79840935e829020ebb86dfc3bc4e1a1936"
-CANARY_WF_SHA="280e90c349c32c43bf20f2edad1c67eeb1f9c988"
-OPT_SHA="fee95b96ee9697bded0ac261003ee87cf1c6260b"
+OPT_SHA="9fc7e612f00a5ca4ee1b85de62167c6690546058"
 
 ORIG_GA="${HOME}/apps/src/guiding_analysis_module"
 ORIG_WF="${HOME}/apps/src/campaign-workflow"
@@ -33,7 +32,7 @@ CHAIN_ITERATION_COUNT=21
 CHAIN_FINAL_ITERATION=21
 REST_ARRAY_SPEC="2-34"
 CHAIN_ARRAY_SPEC="0-31"
-JOB_PREFIX="clpu4v2"
+JOB_PREFIX="clpu4v3"
 
 AUDIT="${ROOT}/audits/rest_chain_$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "${AUDIT}"
@@ -102,7 +101,6 @@ echo "=== Fuentes revisadas y aislamiento multichannel ==="
 [[ -z "$(${GIT_BIN} -C "${OPT}" status --porcelain)" ]]
 
 WF_SHA="$(${GIT_BIN} -C "${WF}" rev-parse HEAD)"
-${GIT_BIN} -C "${WF}" merge-base --is-ancestor "${CANARY_WF_SHA}" "${WF_SHA}"
 
 orig_ga_head="$(${GIT_BIN} -C "${ORIG_GA}" rev-parse HEAD)"
 orig_wf_head="$(${GIT_BIN} -C "${ORIG_WF}" rev-parse HEAD)"

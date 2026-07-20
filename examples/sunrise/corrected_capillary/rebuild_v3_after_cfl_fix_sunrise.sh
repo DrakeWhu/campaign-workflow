@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-OLD_ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50"
-ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2"
+OLD_ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2"
+ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3"
 
 GA="${HOME}/apps/src/guiding_analysis_module-clpu-adk"
 WF="${HOME}/apps/src/campaign-workflow-clpu-adk"
@@ -10,7 +10,7 @@ OPT="${HOME}/apps/src/campaign-optimizer-clpu-adk"
 
 GA_SHA="d8a42b79840935e829020ebb86dfc3bc4e1a1936"
 WF_SHA=""
-OPT_SHA="fee95b96ee9697bded0ac261003ee87cf1c6260b"
+OPT_SHA="9fc7e612f00a5ca4ee1b85de62167c6690546058"
 
 GA_BRANCH="feat/clpu-soft50-v1"
 WF_BRANCH="feat/clpu-corrected-capillary-ionization"
@@ -30,7 +30,7 @@ OPT_PY="${HOME}/apps/venvs/optimas-py310/bin/python"
     exit 10
 }
 [[ ! -e "${ROOT}" ]] || {
-    echo "ERROR: la raíz v2 ya existe; no se toca: ${ROOT}"
+    echo "ERROR: la raíz v3 ya existe; no se toca: ${ROOT}"
     exit 11
 }
 
@@ -125,7 +125,7 @@ source "${HOME}/apps/env/campaign-optimizer.sh"
 [[ -z "$(${GIT_BIN} -C "${WF}" status --porcelain)" ]]
 [[ -z "$(${GIT_BIN} -C "${OPT}" status --porcelain)" ]]
 
-echo "=== Creación de la raíz fresca v2 ==="
+echo "=== Creación de la raíz fresca v3 con timestep CFL derivado de la malla ==="
 umask 002
 mkdir -p \
     "${ROOT}/template_campaign" \
@@ -143,7 +143,7 @@ exec > >(tee "${AUDIT}/rebuild.log") 2>&1
 trap '
 rc=$?
 if (( rc != 0 )); then
-    echo "CLPU_ADK_REBUILD_V2_FAILED=${rc}"
+    echo "CLPU_ADK_REBUILD_V3_FAILED=${rc}"
     echo "Se conserva la raíz parcial para auditoría: '"${ROOT}"'"
     echo "NO_SBATCH_CALLED=1"
 fi
@@ -204,7 +204,7 @@ root = Path(os.environ["ROOT"])
 path = root / "optimization.json"
 payload = json.loads(path.read_text(encoding="utf-8"))
 
-expected = "clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2"
+expected = "clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3"
 assert payload["optimization_name"] == expected
 assert payload["campaign_preparation"]["campaign_name_template"] == (
     expected + "_iter_{next_iteration:03d}"
@@ -238,7 +238,7 @@ BATCH="${ROOT}/optimizer_runs/iter_000/outputs/candidate_batch.tsv"
 PLAN="${ROOT}/optimizer_runs/iter_000/outputs/batch_campaign_plan.json"
 TEMPLATE="${ROOT}/template_campaign"
 ITER="${ROOT}/iterations/iter_000"
-CAMPAIGN_NAME="clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2_iter_000"
+CAMPAIGN_NAME="clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3_iter_000"
 
 export OLD_BATCH BATCH PLAN ITER AUDIT
 python - <<'PY'
@@ -252,7 +252,7 @@ old = Path(os.environ["OLD_BATCH"])
 new = Path(os.environ["BATCH"])
 assert old.is_file(), old
 assert new.is_file(), new
-assert old.read_bytes() == new.read_bytes(), "v2 changed the reviewed iteration-0 batch"
+assert old.read_bytes() == new.read_bytes(), "v3 changed the reviewed iteration-0 batch"
 
 sha = hashlib.sha256(new.read_bytes()).hexdigest()
 assert sha == "56684b6315f4bce225839c241ccad5bd7575b2d1b3dae8e67e3612c191032723"
@@ -271,7 +271,7 @@ assert [float(row["NITROGEN_DOPANT_FRACTION"]) for row in rows[:3]] == [
     0.01,
 ]
 assert all(int(row["CAP_NR"]) == 192 for row in rows)
-print("BATCH_BYTE_IDENTICAL_TO_V1=1")
+print("BATCH_BYTE_IDENTICAL_TO_V2=1")
 print("BATCH_ROWS", len(rows))
 print("BATCH_SHA256", sha)
 PY
@@ -383,8 +383,10 @@ for row, expected_fraction in zip(rows[:2], [0.0, 0.005]):
     resolved = json.loads((case_dir / "resolved_parameters.json").read_text())
     serialized = (case_dir / f"inputs_capillary_{row['CASE_NAME']}").read_text()
 
-    assert resolved["schema_version"] == 2
-    assert resolved["physics_model_id"] == "clpu_carlos_plateau_quasiparabolic_n5_adk_v4"
+    assert resolved["schema_version"] == 3
+    assert resolved["physics_model_id"] == (
+        "clpu_carlos_plateau_quasiparabolic_n5_adk_v5_grid_cfl"
+    )
     assert resolved["channel_profile_longitudinal_scope"] == "plateau_only"
     assert resolved["ramp_radial_model"] == "uniform_inside_capillary"
     assert math.isclose(
@@ -401,18 +403,36 @@ for row, expected_fraction in zip(rows[:2], [0.0, 0.005]):
     assert resolved["particle_diagnostic_target_distance_m"] == (
         resolved["plateau_end_z"] - resolved["plasma_start_z"]
     )
-    assert resolved["particle_diagnostic_target_iteration_unaligned"] == 128000
-    assert resolved["particle_diagnostic_iteration"] == 126666
-    assert resolved["particle_diagnostic_intervals"] == "126666:126666"
+    assert resolved["time_step_model"] == (
+        "WarpX_CylindricalYeeAlgorithm_ComputeMaxDt"
+    )
+    assert resolved["max_steps"] == 91459
+    assert resolved["max_steps_grid_cfl_derived"] == 91459
+    assert resolved["field_diagnostic_period"] == 1946
+    assert resolved["particle_diagnostic_target_iteration_unaligned"] == 60973
+    assert resolved["particle_diagnostic_iteration"] == 60326
+    assert resolved["particle_diagnostic_intervals"] == "60326:60326"
     assert resolved["particle_diagnostic_iteration"] % resolved["field_diagnostic_period"] == 0
-    assert resolved["particle_diagnostic_alignment_error_steps"] == -1334
+    assert resolved["particle_diagnostic_alignment_error_steps"] == -647
+    assert math.isclose(
+        resolved["particle_diagnostic_aligned_distance_m"],
+        resolved["particle_diagnostic_iteration"]
+        * resolved["moving_window_step_distance_m"],
+        rel_tol=1.0e-14,
+        abs_tol=1.0e-15,
+    )
+    assert abs(resolved["particle_diagnostic_alignment_error_m"]) <= (
+        0.5
+        * resolved["field_diagnostic_period"]
+        * resolved["moving_window_step_distance_m"]
+    )
     assert resolved["particle_diagnostic_dump_last_timestep"] is False
     assert resolved["particle_diagnostic_min_energy_MeV"] == 5.0
     assert resolved["particle_diagnostic_forward_only"] is True
     assert resolved["particle_diagnostic_filter_expression"] == expected_filter
     assert resolved["particle_diagnostic_iteration"] != resolved["max_steps"]
 
-    assert 'plasma_electrons.intervals = "126666:126666"' in serialized
+    assert 'plasma_electrons.intervals = "60326:60326"' in serialized
     assert "plasma_electrons.dump_last_timestep = 0" in serialized
     assert "plasma_electrons.dump_last_timestep = 1" not in serialized
     for species in [
@@ -503,7 +523,7 @@ module load Git/2.41.0
 du -sh "${ROOT}"
 
 trap - EXIT
-echo "REBUILD_V2_OK=1"
+echo "REBUILD_V3_OK=1"
 echo "READY_FOR_CANARY=1"
 echo "MATERIALIZED_CASES=35"
 echo "SUBMITTED_CASES=0"

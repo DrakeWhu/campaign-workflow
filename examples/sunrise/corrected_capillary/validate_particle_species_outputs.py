@@ -144,7 +144,9 @@ def validate_selection_contract(
         "particle_diagnostic_target_distance_m",
         "particle_diagnostic_target_iteration_unaligned",
         "particle_diagnostic_alignment_error_steps",
-        "baseline_steps_per_5mm",
+        "particle_diagnostic_aligned_distance_m",
+        "moving_window_step_distance_m",
+        "time_step_model",
         "field_diagnostic_period",
         "plasma_start_z",
         "plateau_end_z",
@@ -198,8 +200,14 @@ def validate_selection_contract(
         abs_tol=1.0e-15,
     ):
         raise ValueError("resolved particle target distance is not the plateau exit")
-    baseline_steps = int(resolved["baseline_steps_per_5mm"])
-    expected_unaligned = int(math.ceil(baseline_steps * target_distance_m / 5.0e-3))
+    if resolved["time_step_model"] != (
+        "WarpX_CylindricalYeeAlgorithm_ComputeMaxDt"
+    ):
+        raise ValueError("unexpected simulation timestep model")
+    step_distance_m = float(resolved["moving_window_step_distance_m"])
+    if not math.isfinite(step_distance_m) or step_distance_m <= 0.0:
+        raise ValueError("resolved moving-window step distance is invalid")
+    expected_unaligned = int(math.ceil(target_distance_m / step_distance_m))
     unaligned = int(resolved["particle_diagnostic_target_iteration_unaligned"])
     if unaligned != expected_unaligned:
         raise ValueError("resolved unaligned particle target iteration is inconsistent")
@@ -207,6 +215,14 @@ def validate_selection_contract(
         expected_iteration - unaligned
     ):
         raise ValueError("resolved particle alignment error is inconsistent")
+    expected_aligned_distance_m = expected_iteration * step_distance_m
+    if not math.isclose(
+        float(resolved["particle_diagnostic_aligned_distance_m"]),
+        expected_aligned_distance_m,
+        rel_tol=1.0e-14,
+        abs_tol=1.0e-15,
+    ):
+        raise ValueError("resolved aligned particle distance is inconsistent")
 
     summary_rows = read_scope_rows(summary_path)
     selection_mode = _single_text_value(

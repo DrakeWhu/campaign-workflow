@@ -77,7 +77,7 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         )
 
     def test_rebuild_uses_a_fresh_root_and_campaign_identity(self) -> None:
-        expected = "clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2"
+        expected = "clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3"
         self.assertEqual(self.optimization["optimization_name"], expected)
         self.assertIn(expected, self.optimization["optimizer"]["optimizer_config"])
         self.assertTrue(
@@ -86,7 +86,7 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         )
 
     def test_rebuild_script_is_syntax_checked_and_stops_before_canary(self) -> None:
-        script = EXAMPLE / "rebuild_v2_before_canary_sunrise.sh"
+        script = EXAMPLE / "rebuild_v3_after_cfl_fix_sunrise.sh"
         text = script.read_text(encoding="utf-8")
         result = subprocess.run(
             ["bash", "-n", str(script)],
@@ -95,7 +95,8 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2", text)
+        self.assertIn("clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3", text)
+        self.assertIn("WarpX_CylindricalYeeAlgorithm_ComputeMaxDt", text)
         self.assertIn("prepare_batch_campaign.py", text)
         self.assertIn("materialize_cases.py", text)
         self.assertIn("init_case_states.py", text)
@@ -110,7 +111,7 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         self.assertIsNone(unsafe.search(text))
 
     def test_resume_preflight_script_is_safe_and_state_preserving(self) -> None:
-        script = EXAMPLE / "resume_v2_preflight_after_materialization_sunrise.sh"
+        script = EXAMPLE / "resume_v3_preflight_after_materialization_sunrise.sh"
         text = script.read_text(encoding="utf-8")
         result = subprocess.run(
             ["bash", "-n", str(script)],
@@ -123,7 +124,7 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         self.assertIn("READY_FOR_CANARY=1", text)
         self.assertIn("NO_SBATCH_CALLED=1", text)
         self.assertIn("NO_OPTIMIZATION_STATE_CHANGED=1", text)
-        self.assertIn('plasma_electrons.intervals = "126666:126666"', text)
+        self.assertIn('plasma_electrons.intervals = "60326:60326"', text)
         unsafe = re.compile(
             r"(^|[;|&()\s])"
             r"(sbatch|srun|mpiexec|mpirun|rm|logout)"
@@ -133,7 +134,7 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         self.assertIsNone(unsafe.search(text))
 
     def test_canary_launcher_is_syntax_checked_and_strictly_scoped(self) -> None:
-        script = EXAMPLE / "launch_v2_canary_sunrise.sh"
+        script = EXAMPLE / "launch_v3_canary_sunrise.sh"
         text = script.read_text(encoding="utf-8")
         result = subprocess.run(
             ["bash", "-n", str(script)],
@@ -142,9 +143,10 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2", text)
+        self.assertIn("clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3", text)
         self.assertEqual(text.count("--action submit_iteration"), 2)
-        self.assertEqual(text.count("--array-spec '0-1%2'"), 2)
+        self.assertEqual(text.count("--array-spec '0-1'"), 2)
+        self.assertNotIn("0-1%", text)
         self.assertEqual(text.count("--dry-run"), 1)
         self.assertEqual(text.count("--execute"), 1)
         self.assertEqual(text.count("--confirm-cleanup-execute"), 2)
@@ -165,7 +167,7 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
         self.assertIsNone(unsafe.search(text))
 
     def test_canary_results_audit_is_read_only_and_complete(self) -> None:
-        script = EXAMPLE / "audit_v2_canary_results_sunrise.sh"
+        script = EXAMPLE / "audit_v3_canary_results_sunrise.sh"
         text = script.read_text(encoding="utf-8")
         result = subprocess.run(
             ["bash", "-n", str(script)],
@@ -199,7 +201,7 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
     def test_rest_and_chain_launcher_resumes_partial_iteration_without_overlap(
         self,
     ) -> None:
-        script = EXAMPLE / "launch_v2_rest_and_chain_sunrise.sh"
+        script = EXAMPLE / "launch_v3_rest_and_chain_sunrise.sh"
         text = script.read_text(encoding="utf-8")
         result = subprocess.run(
             ["bash", "-n", str(script)],
@@ -391,23 +393,96 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
                 "CAP_RMAX_M": "1.8e-4",
             }
         )
-        self.assertEqual(resolved["max_steps"], 192000)
-        self.assertEqual(resolved["field_diagnostic_period"], 4086)
+        self.assertEqual(resolved["schema_version"], 3)
         self.assertEqual(
-            resolved["particle_diagnostic_target_iteration_unaligned"], 128000
+            resolved["physics_model_id"],
+            "clpu_carlos_plateau_quasiparabolic_n5_adk_v5_grid_cfl",
         )
-        self.assertEqual(resolved["particle_diagnostic_iteration"], 126666)
-        self.assertEqual(resolved["particle_diagnostic_intervals"], "126666:126666")
+        self.assertEqual(resolved["max_steps"], 91459)
+        self.assertEqual(resolved["max_steps_grid_cfl_derived"], 91459)
+        self.assertEqual(resolved["field_diagnostic_period"], 1946)
+        self.assertEqual(
+            resolved["particle_diagnostic_target_iteration_unaligned"], 60973
+        )
+        self.assertEqual(resolved["particle_diagnostic_iteration"], 60326)
+        self.assertEqual(resolved["particle_diagnostic_intervals"], "60326:60326")
+        # Regression for canary 613169: the obsolete 64k-steps/5mm model
+        # produced a 4086-step field cadence and selected iteration 61290.
+        # The observed particle dump at 126666 was therefore 65376 steps
+        # downstream and must never be accepted as the plateau-exit sample.
+        self.assertEqual(
+            self.physics.nearest_periodic_iteration(
+                target_iteration=60973,
+                period=4086,
+                max_steps=192000,
+            ),
+            61290,
+        )
+        self.assertEqual(126666 - 61290, 65376)
         self.assertEqual(
             resolved["particle_diagnostic_iteration"]
             % resolved["field_diagnostic_period"],
             0,
+        )
+        self.assertEqual(
+            resolved["time_step_model"],
+            "WarpX_CylindricalYeeAlgorithm_ComputeMaxDt",
+        )
+        self.assertAlmostEqual(
+            resolved["moving_window_step_distance_m"],
+            1.6400852678450127e-7,
+        )
+        self.assertAlmostEqual(
+            resolved["particle_diagnostic_aligned_distance_m"],
+            resolved["particle_diagnostic_iteration"]
+            * resolved["moving_window_step_distance_m"],
+        )
+        self.assertLessEqual(
+            abs(resolved["particle_diagnostic_alignment_error_m"]),
+            0.5
+            * resolved["field_diagnostic_period"]
+            * resolved["moving_window_step_distance_m"],
+        )
+        self.assertGreaterEqual(
+            resolved["max_steps"] * resolved["moving_window_step_distance_m"],
+            resolved["plasma_end_z"] - resolved["plasma_start_z"],
         )
         self.assertFalse(resolved["particle_diagnostic_dump_last_timestep"])
         self.assertEqual(resolved["particle_diagnostic_min_energy_MeV"], 5.0)
         self.assertTrue(resolved["particle_diagnostic_forward_only"])
         self.assertIn("uz > 0.0", resolved["particle_diagnostic_filter_expression"])
         self.assertIn(">= 5", resolved["particle_diagnostic_filter_expression"])
+
+    def test_obsolete_empirical_steps_override_is_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "CAP_BASELINE_STEPS_PER_5MM is no longer supported",
+        ):
+            self.physics.resolve_parameters(
+                {"CAP_BASELINE_STEPS_PER_5MM": "64000"}
+            )
+
+    def test_fixed_nr_recomputes_timestep_for_dynamic_radial_domain(self) -> None:
+        narrow = self.physics.resolve_parameters(
+            {
+                "CAP_RADIUS_M": "7.5e-5",
+                "CAP_RMAX_M": "1.05e-4",
+                "CAP_NR": "192",
+            }
+        )
+        wide = self.physics.resolve_parameters(
+            {
+                "CAP_RADIUS_M": "2.5e-4",
+                "CAP_RMAX_M": "2.8e-4",
+                "CAP_NR": "192",
+            }
+        )
+        self.assertEqual(narrow["grid"]["nr"], wide["grid"]["nr"])
+        self.assertLess(
+            narrow["moving_window_step_distance_m"],
+            wide["moving_window_step_distance_m"],
+        )
+        self.assertGreater(narrow["max_steps"], wide["max_steps"])
 
     def test_input_uses_n5_adk_and_single_particle_diagnostic(self) -> None:
         text = (EXAMPLE / "input_template.py").read_text(encoding="utf-8")

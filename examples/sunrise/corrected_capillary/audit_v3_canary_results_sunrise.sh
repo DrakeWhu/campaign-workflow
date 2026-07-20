@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v2"
+ROOT="${HOME}/warpx_runs/clpu_capillary_guiding_bo_004_corrected_n2_soft50_v3"
 ITER="${ROOT}/iterations/iter_000"
 
 GA="${HOME}/apps/src/guiding_analysis_module-clpu-adk"
@@ -9,8 +9,7 @@ WF="${HOME}/apps/src/campaign-workflow-clpu-adk"
 OPT="${HOME}/apps/src/campaign-optimizer-clpu-adk"
 
 GA_SHA="d8a42b79840935e829020ebb86dfc3bc4e1a1936"
-CANARY_WF_SHA="280e90c349c32c43bf20f2edad1c67eeb1f9c988"
-OPT_SHA="fee95b96ee9697bded0ac261003ee87cf1c6260b"
+OPT_SHA="9fc7e612f00a5ca4ee1b85de62167c6690546058"
 
 ORIG_GA="${HOME}/apps/src/guiding_analysis_module"
 ORIG_WF="${HOME}/apps/src/campaign-workflow"
@@ -45,7 +44,6 @@ GIT_BIN="$(command -v git)"
 [[ -z "$(${GIT_BIN} -C "${OPT}" status --porcelain)" ]]
 
 WF_SHA="$(${GIT_BIN} -C "${WF}" rev-parse HEAD)"
-${GIT_BIN} -C "${WF}" merge-base --is-ancestor "${CANARY_WF_SHA}" "${WF_SHA}"
 
 orig_ga_head="$(${GIT_BIN} -C "${ORIG_GA}" rev-parse HEAD)"
 orig_wf_head="$(${GIT_BIN} -C "${ORIG_WF}" rev-parse HEAD)"
@@ -70,7 +68,7 @@ on_exit() {
 }
 trap on_exit EXIT
 
-export ROOT ITER AUDIT GA_SHA CANARY_WF_SHA OPT_SHA WF_SHA
+export ROOT ITER AUDIT GA_SHA OPT_SHA WF_SHA
 
 CANARY_LAUNCH_AUDIT="$(
 "${PYTHON_BIN}" - <<'PY'
@@ -105,14 +103,14 @@ assert launch["status"] == "canary_submitted"
 assert Path(launch["root"]).resolve() == root.resolve()
 assert launch["iteration"] == 0
 assert launch["case_ids"] == [0, 1]
-assert launch["array_spec"] == "0-1%2"
+assert launch["array_spec"] == "0-1"
 assert str(launch["slurm_job_id"]).isdigit()
 assert launch["partition"] == "T12H"
 assert launch["walltime"] == "12:00:00"
 assert launch["cleanup_after_required_output_validation"] is True
 assert launch["source_commits"] == {
     "guiding_analysis_module": os.environ["GA_SHA"],
-    "campaign_workflow": os.environ["CANARY_WF_SHA"],
+    "campaign_workflow": os.environ["WF_SHA"],
     "campaign_optimizer": os.environ["OPT_SHA"],
 }
 
@@ -221,8 +219,14 @@ for row, expected_fraction in zip(rows[:2], [0.0, 0.005]):
         rel_tol=0.0,
         abs_tol=1.0e-15,
     )
-    assert resolved["particle_diagnostic_iteration"] == 126666
-    assert resolved["particle_diagnostic_intervals"] == "126666:126666"
+    assert resolved["schema_version"] == 3
+    assert resolved["physics_model_id"] == (
+        "clpu_carlos_plateau_quasiparabolic_n5_adk_v5_grid_cfl"
+    )
+    assert resolved["max_steps"] == 91459
+    assert resolved["field_diagnostic_period"] == 1946
+    assert resolved["particle_diagnostic_iteration"] == 60326
+    assert resolved["particle_diagnostic_intervals"] == "60326:60326"
     assert resolved["particle_diagnostic_dump_last_timestep"] is False
 
     species_validation = json.loads(
@@ -236,8 +240,12 @@ for row, expected_fraction in zip(rows[:2], [0.0, 0.005]):
     selection = species_validation["selection"]
     assert selection["status"] == "ok"
     assert selection["selection_mode"] == "exit"
-    assert selection["selected_particle_iteration"] == 126666
-    assert selection["target_guiding_iteration"] == 126666
+    assert selection["selected_particle_iteration"] == (
+        resolved["particle_diagnostic_iteration"]
+    )
+    assert selection["target_guiding_iteration"] == (
+        resolved["particle_diagnostic_iteration"]
+    )
     assert selection["target_iteration_delta"] == 0
     assert selection["maximum_target_iteration_delta"] == 0
     assert selection["n_available_particle_iterations"] == 1
