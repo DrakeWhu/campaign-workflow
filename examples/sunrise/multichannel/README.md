@@ -1,4 +1,4 @@
-# 3D multichannel honeycomb campaign on SUNRISE
+# 3D multichannel honeycomb soft100 v2 campaign on SUNRISE
 
 This example connects the generic campaign lifecycle to the multichannel
 optimizer and `multichannel-lfmetrics`:
@@ -6,7 +6,7 @@ optimizer and `multichannel-lfmetrics`:
 ```text
 WarpX final frame
 -> raw HDF5 validation
--> LFMetrics beam summary and plots
+-> LFMetrics beam summary, soft100 metrics and plots
 -> reduced-output validation
 -> manifest-driven HDF5 cleanup
 -> Sobol or MORBO proposal
@@ -17,13 +17,21 @@ um`. The campaign scans 11 native parameters, including periodic honeycomb and
 linear-polarization angles plus an ellipticity angle. Periodic angles are
 encoded as sine/cosine pairs by the optimizer.
 
+The v2 analysis uses a forward-only smooth energy acceptance with
+`E_low=5 MeV`, `E_target=100 MeV`, `r_min=0.05` and `N_ref=100`. Its five MORBO
+objectives are unbounded physical metrics: maximize soft charge and soft
+energy p95; minimize soft divergence p95, normalized transverse emittance and
+relative RMS energy spread. Eligibility requires `soft100_status=ok`, positive
+soft charge and `n_effective_soft100 >= 100`. Reliability and halo fraction
+remain diagnostics rather than objectives.
+
 ## Required repositories and environments
 
 Expected SUNRISE checkouts:
 
 ```bash
-export WORKFLOW_ROOT="${HOME}/src/campaign-workflow"
-export OPTIMIZER_ROOT="${HOME}/src/campaign-optimizer"
+export WORKFLOW_ROOT="${HOME}/apps/src/campaign-workflow"
+export OPTIMIZER_ROOT="${HOME}/apps/src/campaign-optimizer"
 ```
 
 The case-cycle environment must expose `campaign_workflow`. The optimizer
@@ -61,12 +69,12 @@ PY
 Create one optimization root on SUNRISE:
 
 ```bash
-export OPT_ROOT="${HOME}/warpx_runs/multichannel_honeycomb_3d"
+export OPT_ROOT="${HOME}/warpx_runs/multichannel_honeycomb_3d_energy_soft_v2"
 mkdir -p "${OPT_ROOT}/iterations" "${OPT_ROOT}/optimizer_runs" "${OPT_ROOT}/loop_logs"
 
 cp "${WORKFLOW_ROOT}/examples/sunrise/multichannel/optimization.json" \
    "${OPT_ROOT}/optimization.json"
-cp "${OPTIMIZER_ROOT}/examples/optimizer_multichannel_sunrise.json" \
+cp "${OPTIMIZER_ROOT}/examples/optimizer_multichannel_soft100_sunrise.json" \
    "${OPT_ROOT}/optimizer.json"
 ```
 
@@ -92,7 +100,7 @@ python -m campaign_workflow.cli.prepare_batch_campaign \
     --batch-plan "${OPT_ROOT}/optimizer_runs/iter_000/outputs/batch_campaign_plan.json" \
     --template-campaign-root "${WORKFLOW_ROOT}/examples/sunrise/multichannel" \
     --output-campaign-root "${OPT_ROOT}/iterations/iter_000" \
-    --campaign-name multichannel_honeycomb_3d_iter_000 \
+    --campaign-name multichannel_honeycomb_3d_energy_soft_v2_iter_000 \
     --dry-run
 
 python -m campaign_workflow.cli.prepare_batch_campaign \
@@ -100,7 +108,7 @@ python -m campaign_workflow.cli.prepare_batch_campaign \
     --batch-plan "${OPT_ROOT}/optimizer_runs/iter_000/outputs/batch_campaign_plan.json" \
     --template-campaign-root "${WORKFLOW_ROOT}/examples/sunrise/multichannel" \
     --output-campaign-root "${OPT_ROOT}/iterations/iter_000" \
-    --campaign-name multichannel_honeycomb_3d_iter_000 \
+    --campaign-name multichannel_honeycomb_3d_energy_soft_v2_iter_000 \
     --execute
 
 python -m campaign_workflow.cli.materialize_cases \

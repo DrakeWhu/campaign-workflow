@@ -94,6 +94,32 @@ class MultichannelSunriseExampleTests(unittest.TestCase):
         for glob in globs:
             self.assertNotIn("**", glob)
 
+    def test_reduced_contract_requires_soft100_optimizer_metrics(self) -> None:
+        particle_summary = next(
+            output
+            for output in self.config["analysis"]["outputs"]
+            if output["name"] == "particle_summary"
+        )
+        required = particle_summary["required_columns"]
+
+        for name in (
+            "soft100_schema_version",
+            "soft100_status",
+            "charge_soft100_pC",
+            "n_effective_soft100",
+            "energy_p95_soft100_MeV",
+            "energy_relative_spread_rms_soft100",
+            "theta_r_p95_soft100_mrad",
+            "emitn_xy_soft100_um_rad",
+            "halo_fraction_soft100",
+        ):
+            self.assertIn(name, required)
+
+        self.assertIn(
+            "multichannel_honeycomb_3d_energy_soft_v2",
+            self.optimization["campaign_preparation"]["campaign_name_template"],
+        )
+
     def test_staged_pilot_is_registered_and_guards_use_runtime_schema(self) -> None:
         readme = (self.example / "README.md").read_text(encoding="utf-8")
         guards = self.optimization["guards"]

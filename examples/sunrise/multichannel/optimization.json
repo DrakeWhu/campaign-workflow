@@ -19,7 +19,7 @@
     "optimizer_runs_dir": "optimizer_runs",
     "iterations_dir": "iterations",
     "template_campaign_root": "iterations/iter_000",
-    "campaign_name_template": "multichannel_honeycomb_3d_iter_{next_iteration:03d}",
+    "campaign_name_template": "multichannel_honeycomb_3d_energy_soft_v2_iter_{next_iteration:03d}",
     "materialize_after_prepare": true,
     "init_case_states_after_materialize": true
   },
