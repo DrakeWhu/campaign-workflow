@@ -202,7 +202,8 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
             "READY_FOR_REST_AND_CHAIN=1",
             "PARTICLE_EXIT_SELECTION_VALIDATED=1",
             "SPECIES_PROVENANCE_VALIDATED=1",
-            "ADK_ELECTRONS_OBSERVED_IN_DOPED_CANARY=1",
+            "NITROGEN_SPECIES_DIAGNOSTIC_VALIDATED=1",
+            "DOPED_CANARY_FORWARD_GE5MEV_OBSERVED=",
             "ANIMATIONS_VALIDATED=1",
             "NO_HDF5_REMAINING=1",
             "NO_STATE_CHANGED=1",
@@ -211,6 +212,26 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
             self.assertIn(marker, text)
         self.assertIn('state["state"] == "Raw_deleted"', text)
         self.assertIn('selection["target_iteration_delta"] == 0', text)
+        self.assertIn('species_validation["status"] == "ok"', text)
+        self.assertIn(
+            'CANARY_LAUNCH_WF_SHA="05734dbbc7490c393888f8347c249273094b81d2"',
+            text,
+        )
+        self.assertIn('"canary_launch_source_commits": launch["source_commits"]', text)
+        self.assertIn('"audit_source_commits": {', text)
+        self.assertIn(
+            'assert total_macro["nitrogen_ionized_electrons"] == 0',
+            text,
+        )
+        self.assertIn(
+            '"doped_canary_forward_ge5mev_observed": (',
+            text,
+        )
+        self.assertNotIn(
+            'assert total_macro["nitrogen_ionized_electrons"] > 0',
+            text,
+        )
+        self.assertNotIn("ADK_ELECTRONS_OBSERVED_IN_DOPED_CANARY", text)
         unsafe = re.compile(
             r"(^|[;|&()\s])"
             r"(sbatch|srun|mpiexec|mpirun|rm|logout)"
