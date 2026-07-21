@@ -218,7 +218,7 @@ class CorrectedCapillarySunriseExampleTests(unittest.TestCase):
             text,
         )
         self.assertIn('"canary_launch_source_commits": launch["source_commits"]', text)
-        self.assertIn('"audit_source_commits": {', text)
+        self.assertIn('"source_commits": {', text)
         self.assertIn(
             'assert total_macro["nitrogen_ionized_electrons"] == 0',
             text,

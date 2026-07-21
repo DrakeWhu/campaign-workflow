@@ -348,7 +348,7 @@ result = {
     "doped_canary_forward_ge5mev_observed": (
         doped_canary_forward_ge5mev_observed
     ),
-    "audit_source_commits": {
+    "source_commits": {
         "guiding_analysis_module": os.environ["GA_SHA"],
         "campaign_workflow": os.environ["WF_SHA"],
         "campaign_optimizer": os.environ["OPT_SHA"],
