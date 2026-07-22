@@ -498,16 +498,11 @@ def resolve_parameters(environ: Mapping[str, str] | None = None) -> dict[str, An
     particle_diagnostic_intervals = (
         f"{particle_diagnostic_iteration}:{particle_diagnostic_iteration}"
     )
-    particle_min_energy_mev = env_float(
-        env, "CAP_PARTICLE_DIAG_MIN_ENERGY_MEV", 5.0
-    )
-    particle_forward_only = env_bool(
-        env, "CAP_PARTICLE_DIAG_FORWARD_ONLY", True
-    )
-    particle_filter_expression = build_particle_diagnostic_filter_expression(
-        minimum_energy_mev=particle_min_energy_mev,
-        forward_only=particle_forward_only,
-    )
+    # V4 canary: preserve the complete aligned particle population.
+    # Energy and forward cuts are applied only during post-processing.
+    particle_min_energy_mev = 0.0
+    particle_forward_only = False
+    particle_filter_expression = None
     particle_aligned_distance_m = (
         particle_diagnostic_iteration * moving_window_step_distance_m
     )
@@ -596,7 +591,7 @@ def resolve_parameters(environ: Mapping[str, str] | None = None) -> dict[str, An
         "moving_window_step_distance_m": moving_window_step_distance_m,
         "field_diagnostic_period": field_period,
         "target_field_frames": target_field_frames,
-        "particle_diagnostic_policy": "single_plateau_exit_field_aligned_filtered_v1",
+        "particle_diagnostic_policy": "single_plateau_exit_field_aligned_unfiltered_v1",
         "particle_diagnostic_target": "plateau_exit",
         "particle_diagnostic_target_distance_m": plateau_exit_distance_m,
         "particle_diagnostic_target_iteration_unaligned": particle_target_step,
@@ -822,9 +817,6 @@ def main() -> None:
                 write_dir="diags",
                 warpx_format="openpmd",
                 warpx_openpmd_backend="h5",
-                warpx_plot_filter_function=resolved[
-                    "particle_diagnostic_filter_expression"
-                ],
                 warpx_dump_last_timestep=False,
             )
         )
