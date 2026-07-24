@@ -30,26 +30,22 @@ def _exact_target(
     *,
     target_distance_m: float,
     moving_window_step_distance_m: float,
-    field_period: int,
     max_steps: int,
 ) -> dict[str, float | int]:
-    target_step = BASE.steps_for_distance(
+    iteration = BASE.steps_for_distance(
         target_distance_m,
         moving_window_step_distance_m,
     )
-    iteration = BASE.nearest_periodic_iteration(
-        target_iteration=target_step,
-        period=field_period,
-        max_steps=max_steps,
-    )
-    aligned_distance_m = iteration * moving_window_step_distance_m
+    if iteration > max_steps:
+        raise ValueError(
+            "simulation max_steps does not reach the requested particle target"
+        )
+    dump_distance_m = iteration * moving_window_step_distance_m
     return {
         "target_distance_m": float(target_distance_m),
-        "target_iteration_unaligned": int(target_step),
         "iteration": int(iteration),
-        "aligned_distance_m": float(aligned_distance_m),
-        "alignment_error_steps": int(iteration - target_step),
-        "alignment_error_m": float(aligned_distance_m - target_distance_m),
+        "dump_distance_m": float(dump_distance_m),
+        "distance_error_m": float(dump_distance_m - target_distance_m),
     }
 
 
@@ -66,7 +62,6 @@ def resolve_parameters(
 
     resolved = dict(BASE.resolve_parameters(env))
     step_distance_m = float(resolved["moving_window_step_distance_m"])
-    field_period = int(resolved["field_diagnostic_period"])
     max_steps = int(resolved["max_steps"])
 
     plateau = _exact_target(
@@ -75,7 +70,6 @@ def resolve_parameters(
             - float(resolved["plasma_start_z"])
         ),
         moving_window_step_distance_m=step_distance_m,
-        field_period=field_period,
         max_steps=max_steps,
     )
     capillary = _exact_target(
@@ -84,7 +78,6 @@ def resolve_parameters(
             - float(resolved["plasma_start_z"])
         ),
         moving_window_step_distance_m=step_distance_m,
-        field_period=field_period,
         max_steps=max_steps,
     )
 
@@ -111,7 +104,7 @@ def resolve_parameters(
                 "ionization_products": None,
             },
             "particle_diagnostic_policy": (
-                "dual_plateau_capillary_exit_field_aligned_unfiltered_v1"
+                "dual_plateau_capillary_exit_exact_step_unfiltered_v1"
             ),
             "particle_diagnostic_primary_target": "plateau_exit",
             "particle_diagnostic_targets": {
@@ -124,17 +117,15 @@ def resolve_parameters(
                 "target_distance_m"
             ],
             "particle_diagnostic_target_iteration_unaligned": plateau[
-                "target_iteration_unaligned"
+                "iteration"
             ],
             "particle_diagnostic_iteration": plateau["iteration"],
             "particle_diagnostic_aligned_distance_m": plateau[
-                "aligned_distance_m"
+                "dump_distance_m"
             ],
-            "particle_diagnostic_alignment_error_steps": plateau[
-                "alignment_error_steps"
-            ],
+            "particle_diagnostic_alignment_error_steps": 0,
             "particle_diagnostic_alignment_error_m": plateau[
-                "alignment_error_m"
+                "distance_error_m"
             ],
             "particle_diagnostic_min_energy_MeV": 0.0,
             "particle_diagnostic_forward_only": False,
