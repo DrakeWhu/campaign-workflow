@@ -1,0 +1,274 @@
+{
+  "schema_version": 1,
+  "campaign_name": "clpu_capillary_corrected_hydrogen_baseline_soft50",
+  "description": "CLPU RZ hydrogen baseline with Carlos's plateau-only 0.33 r^2 + 0.4 r^4 channel, radially uniform ramps, no nitrogen or field ionization, exact plateau/capillary particle dumps, soft50 particle metrics and guiding animations.",
+  "case_manifest": "cases.tsv",
+  "case_manifest_format": "tsv",
+  "case_id_column": "CASE_ID",
+  "case_name_column": "CASE_NAME",
+  "simulation": {
+    "backend": "warpx_picmi",
+    "scheduler": "slurm",
+    "input_script": "input.py",
+    "completion_marker": "post/sim_done.json",
+    "failure_marker": "post/sim_failed.json"
+  },
+  "case_materialization": {
+    "input_template": "baseline_input_template.py",
+    "input_name": "input.py",
+    "env_name": "case.env",
+    "env_columns": [
+      {"column": "CASE_ID", "env": "CAP_CASE_ID", "required": true},
+      {"column": "CASE_NAME", "env": "CAP_CASE_NAME", "required": true},
+      {"column": "LASER_CASE", "env": "CAP_LASER_CASE", "required": true},
+      {"column": "PLASMA_KIND", "env": "CAP_PLASMA_KIND", "required": true},
+      {"column": "N0_CM3", "env": "CAP_N0_CM3", "required": true},
+      {"column": "PLATEAU_LENGTH_MM", "env": "CAP_PLATEAU_LENGTH_M", "required": true, "scale": "1e-3"},
+      {"column": "RADIUS_UM", "env": "CAP_RADIUS_M", "required": true, "scale": "1e-6"},
+      {"column": "FOCUS_OFFSET_FROM_PLATEAU_START_MM", "env": "CAP_FOCUS_OFFSET_FROM_PLATEAU_START_MM", "required": true},
+      {"column": "PULSE_RESONANCE_FACTOR", "env": "CAP_PULSE_RESONANCE_FACTOR", "required": true},
+      {"column": "LASER_DURATION_FWHM_FS", "env": "CAP_LASER_INTENSITY_FWHM_S", "required": true, "scale": "1e-15"},
+      {"column": "CAP_RMAX_UM", "env": "CAP_RMAX_M", "required": true, "scale": "1e-6"},
+      {"column": "CAP_NR", "env": "CAP_NR", "required": true}
+    ],
+    "env_constants": {
+      "CAP_LONG_PROFILE": "both",
+      "CAP_NITROGEN_DOPANT_FRACTION": "0",
+      "CAP_REQUIRE_CONVENTION_ACK": "true",
+      "CAP_INPUT_CONVENTIONS_ACK": "clpu_spot_diameter_and_30fs_intensity_fwhm_v1",
+      "CAP_LASER_SPOT_DEFINITION": "diameter_1e2_intensity",
+      "CAP_TARGET_FIELD_FRAMES": "48",
+      "CAP_MAX_RADIAL_CELL_M": "1.5e-6"
+    }
+  },
+  "raw_diagnostics": [
+    {
+      "name": "fields_openpmd",
+      "kind": "openpmd_hdf5",
+      "path": "diags/fields",
+      "glob": "diags/fields/*.h5",
+      "allowed_suffixes": [".h5", ".hdf5"],
+      "min_files": 2,
+      "min_age_seconds": 0,
+      "required": true
+    },
+    {
+      "name": "particles_openpmd",
+      "kind": "openpmd_hdf5",
+      "path": "diags/plasma_electrons",
+      "glob": "diags/plasma_electrons/*.h5",
+      "allowed_suffixes": [".h5", ".hdf5"],
+      "min_files": 2,
+      "min_age_seconds": 0,
+      "required": true
+    }
+  ],
+  "analysis": {
+    "name": "guiding_and_soft50_dual_exit",
+    "kind": "command",
+    "adapter": "command",
+    "inputs": ["fields_openpmd", "particles_openpmd"],
+    "command": [
+      "bash",
+      "{workflow_root}/examples/sunrise/corrected_capillary/run_baseline_case_analysis_sunrise.sh",
+      "{case_dir}"
+    ],
+    "outputs": [
+      {
+        "name": "resolved_parameters",
+        "kind": "file",
+        "path": "resolved_parameters.json",
+        "allowed_suffixes": [".json"],
+        "min_bytes": 100,
+        "required": true
+      },
+      {
+        "name": "guiding_metrics",
+        "kind": "csv",
+        "path": "guiding_metrics.csv",
+        "min_rows": 2,
+        "required_columns": ["iteration", "waist_um", "a0_peak", "propagation_mm"],
+        "required": true
+      },
+      {
+        "name": "guiding_singlecase_score",
+        "kind": "csv",
+        "path": "guiding_singlecase_score.csv",
+        "min_rows": 1,
+        "required_columns": ["metric_guiding_singlecase_status", "metric_guiding_singlecase_score_v1"],
+        "required": true
+      },
+      {
+        "name": "guiding_plot_waist",
+        "kind": "file",
+        "path": "plots/laser_waist_rms.png",
+        "allowed_suffixes": [".png"],
+        "min_bytes": 10000,
+        "required": true
+      },
+      {
+        "name": "guiding_plot_a0",
+        "kind": "file",
+        "path": "plots/laser_a0_peak.png",
+        "allowed_suffixes": [".png"],
+        "min_bytes": 10000,
+        "required": true
+      },
+      {
+        "name": "guiding_plot_summary",
+        "kind": "file",
+        "path": "plots/guiding_summary_multipanel.png",
+        "allowed_suffixes": [".png"],
+        "min_bytes": 10000,
+        "required": true
+      },
+      {
+        "name": "particle_plateau_summary",
+        "kind": "csv",
+        "path": "particle_analysis/plateau_exit/particle_summary.csv",
+        "min_rows": 1,
+        "required_columns": [
+          "species_scope",
+          "selection_mode",
+          "selected_particle_iteration",
+          "soft50_schema_version",
+          "charge_soft50_pC",
+          "n_effective_soft50",
+          "energy_p90_soft50_MeV",
+          "energy_relative_spread_rms_soft50",
+          "theta_r_p95_soft50_mrad",
+          "emitn_xy_soft50_um_rad"
+        ],
+        "required": true
+      },
+      {
+        "name": "particle_plateau_soft50_curves",
+        "kind": "csv",
+        "path": "particle_analysis/plateau_exit/particle_soft50_curves.csv",
+        "min_rows": 6,
+        "required_columns": [
+          "species_scope",
+          "soft50_energy_low_MeV",
+          "charge_soft50_pC",
+          "n_effective_soft50",
+          "energy_p90_soft50_MeV",
+          "energy_relative_spread_rms_soft50"
+        ],
+        "required": true
+      },
+      {
+        "name": "particle_plateau_acceptance_curves",
+        "kind": "csv",
+        "path": "particle_analysis/plateau_exit/particle_acceptance_curves.csv",
+        "min_rows": 1,
+        "required_columns": ["species_scope"],
+        "required": true
+      },
+      {
+        "name": "particle_capillary_summary",
+        "kind": "csv",
+        "path": "particle_analysis/capillary_exit/particle_summary.csv",
+        "min_rows": 1,
+        "required_columns": [
+          "species_scope",
+          "selection_mode",
+          "selected_particle_iteration",
+          "soft50_schema_version",
+          "charge_soft50_pC",
+          "n_effective_soft50",
+          "energy_p90_soft50_MeV",
+          "energy_relative_spread_rms_soft50",
+          "theta_r_p95_soft50_mrad",
+          "emitn_xy_soft50_um_rad"
+        ],
+        "required": true
+      },
+      {
+        "name": "particle_capillary_soft50_curves",
+        "kind": "csv",
+        "path": "particle_analysis/capillary_exit/particle_soft50_curves.csv",
+        "min_rows": 6,
+        "required_columns": [
+          "species_scope",
+          "soft50_energy_low_MeV",
+          "charge_soft50_pC",
+          "n_effective_soft50",
+          "energy_p90_soft50_MeV",
+          "energy_relative_spread_rms_soft50"
+        ],
+        "required": true
+      },
+      {
+        "name": "particle_capillary_acceptance_curves",
+        "kind": "csv",
+        "path": "particle_analysis/capillary_exit/particle_acceptance_curves.csv",
+        "min_rows": 1,
+        "required_columns": ["species_scope"],
+        "required": true
+      },
+      {
+        "name": "animation_eperp2",
+        "kind": "file",
+        "path": "animations/eperp2.mp4",
+        "allowed_suffixes": [".mp4"],
+        "min_bytes": 50000,
+        "required": true
+      },
+      {
+        "name": "animation_ez_wake",
+        "kind": "file",
+        "path": "animations/ez_wake.mp4",
+        "allowed_suffixes": [".mp4"],
+        "min_bytes": 50000,
+        "required": true
+      },
+      {
+        "name": "animation_frame_metrics",
+        "kind": "csv",
+        "path": "animations/animation_frame_metrics.csv",
+        "min_rows": 2,
+        "required_columns": [
+          "iteration",
+          "propagation_mm",
+          "z_peak_um",
+          "waist_um",
+          "peak_eperp2_relative",
+          "ez_absmax_GVm"
+        ],
+        "required": true
+      },
+      {
+        "name": "animation_validation",
+        "kind": "file",
+        "path": "animations/validation.json",
+        "allowed_suffixes": [".json"],
+        "min_bytes": 100,
+        "required": true
+      }
+    ]
+  },
+  "cleanup": {
+    "raw_delete_globs": [
+      "diags/fields/*.h5",
+      "diags/fields/*.hdf5",
+      "diags/plasma_electrons/*.h5",
+      "diags/plasma_electrons/*.hdf5"
+    ],
+    "require_raw_validated": true,
+    "require_reduced_validated": true,
+    "require_delete_manifest": true,
+    "allow_directory_delete": false
+  },
+  "storage": {
+    "snapshot_dir": "snapshots",
+    "reservation_dir": "reservations",
+    "events_dir": "events"
+  },
+  "state": {
+    "state_file": "state.json",
+    "validation_file": "validation.json",
+    "locks_dir": "locks",
+    "manifests_dir": "manifests",
+    "post_dir": "post"
+  }
+}
