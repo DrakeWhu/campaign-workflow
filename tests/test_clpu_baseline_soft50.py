@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import math
 import os
 import shutil
@@ -11,13 +12,14 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = (
+EXAMPLE = (
     ROOT
     / "examples"
     / "sunrise"
     / "corrected_capillary"
-    / "baseline_input_template.py"
 )
+TEMPLATE = EXAMPLE / "baseline_input_template.py"
+CAMPAIGN = EXAMPLE / "campaign_baseline_soft50.json"
 
 
 def load_template(path: Path = TEMPLATE):
@@ -56,6 +58,17 @@ class ClpuBaselineSoft50Test(unittest.TestCase):
             "CAP_LASER_INTENSITY_FWHM_S": "30e-15",
         }
 
+    def test_campaign_uses_prepared_input_template_name(self) -> None:
+        campaign = json.loads(CAMPAIGN.read_text(encoding="utf-8"))
+        self.assertEqual(
+            campaign["case_materialization"]["input_template"],
+            "input_template.py",
+        )
+        self.assertEqual(
+            campaign["case_materialization"]["input_name"],
+            "input.py",
+        )
+
     def test_materialized_input_resolves_base_via_workflow_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             case_input = Path(tmp_name) / "input.py"
@@ -72,7 +85,10 @@ class ClpuBaselineSoft50Test(unittest.TestCase):
             resolved["physics_model_id"],
             "clpu_carlos_plateau_quasiparabolic_hydrogen_baseline_soft50_dual_exit_v1",
         )
-        self.assertEqual(module.BASE.__file__, str((TEMPLATE.parent / "input_template.py").resolve()))
+        self.assertEqual(
+            module.BASE.__file__,
+            str((TEMPLATE.parent / "input_template.py").resolve()),
+        )
 
     def test_rejects_nonzero_nitrogen(self) -> None:
         env = self.base_env()
