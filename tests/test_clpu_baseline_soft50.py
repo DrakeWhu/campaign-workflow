@@ -3,8 +3,11 @@ from __future__ import annotations
 import importlib.util
 import math
 import os
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,13 +20,13 @@ TEMPLATE = (
 )
 
 
-def load_template():
+def load_template(path: Path = TEMPLATE):
     spec = importlib.util.spec_from_file_location(
         "clpu_baseline_input_template",
-        TEMPLATE,
+        path,
     )
     if spec is None or spec.loader is None:
-        raise ImportError(f"could not import {TEMPLATE}")
+        raise ImportError(f"could not import {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -52,6 +55,24 @@ class ClpuBaselineSoft50Test(unittest.TestCase):
             "CAP_RAMP_LENGTH_M": "5e-3",
             "CAP_LASER_INTENSITY_FWHM_S": "30e-15",
         }
+
+    def test_materialized_input_resolves_base_via_workflow_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            case_input = Path(tmp_name) / "input.py"
+            shutil.copyfile(TEMPLATE, case_input)
+            env = {
+                **self.base_env(),
+                "WFLOW_SRC": str(ROOT),
+            }
+            with patch.dict(os.environ, env, clear=True):
+                module = load_template(case_input)
+                resolved = module.resolve_parameters()
+
+        self.assertEqual(
+            resolved["physics_model_id"],
+            "clpu_carlos_plateau_quasiparabolic_hydrogen_baseline_soft50_dual_exit_v1",
+        )
+        self.assertEqual(module.BASE.__file__, str((TEMPLATE.parent / "input_template.py").resolve()))
 
     def test_rejects_nonzero_nitrogen(self) -> None:
         env = self.base_env()
