@@ -11,16 +11,45 @@ from typing import Any, Mapping
 
 
 def _load_base_module() -> ModuleType:
-    path = Path(__file__).with_name("input_template.py")
-    spec = importlib.util.spec_from_file_location(
-        "clpu_corrected_capillary_input_template",
-        path,
+    this_file = Path(__file__).resolve()
+    candidates: list[Path] = []
+
+    explicit = os.environ.get("CAP_CORRECTED_INPUT_TEMPLATE", "").strip()
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+
+    candidates.append(this_file.with_name("input_template.py"))
+
+    workflow_root = os.environ.get("WFLOW_SRC", "").strip()
+    if workflow_root:
+        candidates.append(
+            Path(workflow_root).expanduser()
+            / "examples"
+            / "sunrise"
+            / "corrected_capillary"
+            / "input_template.py"
+        )
+
+    checked: list[str] = []
+    for candidate in candidates:
+        path = candidate.resolve(strict=False)
+        checked.append(str(path))
+        if path == this_file or not path.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location(
+            "clpu_corrected_capillary_input_template",
+            path,
+        )
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    raise ImportError(
+        "could not locate corrected capillary input template; checked: "
+        + ", ".join(checked)
     )
-    if spec is None or spec.loader is None:
-        raise ImportError(f"could not load corrected capillary template: {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 BASE = _load_base_module()
