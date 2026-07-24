@@ -14,7 +14,7 @@
     "failure_marker": "post/sim_failed.json"
   },
   "case_materialization": {
-    "input_template": "baseline_input_template.py",
+    "input_template": "input_template.py",
     "input_name": "input.py",
     "env_name": "case.env",
     "env_columns": [
