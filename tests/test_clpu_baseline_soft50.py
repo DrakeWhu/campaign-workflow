@@ -107,12 +107,64 @@ class ClpuBaselineSoft50Test(unittest.TestCase):
 
         self.assertEqual(
             resolved["physics_model_id"],
-            "clpu_carlos_plateau_quasiparabolic_hydrogen_baseline_soft50_dual_exit_v1",
+            "clpu_carlos_plateau_quasiparabolic_hydrogen_baseline_"
+            "soft50_dual_exit_picmi_w0_v2",
         )
         self.assertEqual(
             module.BASE.__file__,
             str((TEMPLATE.parent / "input_template.py").resolve()),
         )
+
+    def test_document_spot_values_are_picmi_waists(self) -> None:
+        expected = {
+            "f20": 26.0e-6,
+            "f32": 42.0e-6,
+            "f40": 52.0e-6,
+        }
+
+        for laser_case, waist_m in expected.items():
+            with self.subTest(laser_case=laser_case):
+                env = self.base_env()
+                env["CAP_LASER_CASE"] = laser_case
+                resolved = self.module.resolve_parameters(env)
+
+                self.assertTrue(
+                    math.isclose(
+                        resolved["laser_waist_radius_m"],
+                        waist_m,
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-18,
+                    )
+                )
+                self.assertEqual(
+                    resolved["laser_spot_definition"],
+                    "picmi_waist_w0_1e2_intensity",
+                )
+                self.assertEqual(
+                    resolved["laser_waist_contract"],
+                    "CLPU_26_42_52um_values_passed_directly_to_PICMI_waist_w0",
+                )
+
+        f32 = self.module.resolve_parameters(self.base_env())
+        expected_duration = 30.0e-15 / math.sqrt(2.0 * math.log(2.0))
+        self.assertTrue(
+            math.isclose(
+                f32["laser_picmi_duration_s"],
+                expected_duration,
+                rel_tol=1.0e-12,
+                abs_tol=1.0e-24,
+            )
+        )
+
+    def test_rejects_half_waist_override(self) -> None:
+        env = self.base_env()
+        env["CAP_LASER_WAIST_M"] = "21e-6"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "passed directly as PICMI w0",
+        ):
+            self.module.resolve_parameters(env)
 
     def test_rejects_nonzero_nitrogen(self) -> None:
         env = self.base_env()
