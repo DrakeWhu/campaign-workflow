@@ -15,7 +15,10 @@ BASELINE_LASER_WAISTS_M = {
     "f32": 42.0e-6,
     "f40": 52.0e-6,
 }
-BASELINE_LASER_WAIST_CONVENTION = "clpu_document_spot_values_are_picmi_w0_v1"
+BASELINE_LASER_WAIST_CONVENTION = (
+    "clpu_document_spot_values_are_picmi_w0_and_30fs_intensity_fwhm_v2"
+)
+BASELINE_LASER_SPOT_DEFINITION = "picmi_waist_w0_1e2_intensity"
 
 
 def _load_base_module() -> ModuleType:
@@ -90,6 +93,25 @@ def resolve_parameters(
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     env = dict(os.environ if environ is None else environ)
+
+    convention_ack = str(env.get("CAP_INPUT_CONVENTIONS_ACK", "")).strip()
+    if BASE.env_bool(env, "CAP_REQUIRE_CONVENTION_ACK", False) and (
+        convention_ack != BASELINE_LASER_WAIST_CONVENTION
+    ):
+        raise ValueError(
+            "baseline production preflight requires "
+            f"CAP_INPUT_CONVENTIONS_ACK={BASELINE_LASER_WAIST_CONVENTION}"
+        )
+
+    spot_definition = str(
+        env.get("CAP_LASER_SPOT_DEFINITION", "")
+    ).strip().lower()
+    if spot_definition != BASELINE_LASER_SPOT_DEFINITION:
+        raise ValueError(
+            "baseline campaign requires CAP_LASER_SPOT_DEFINITION="
+            f"{BASELINE_LASER_SPOT_DEFINITION}"
+        )
+
     requested_fraction = float(env.get("CAP_NITROGEN_DOPANT_FRACTION", "0") or 0.0)
     if not math.isclose(requested_fraction, 0.0, abs_tol=0.0):
         raise ValueError(
@@ -119,7 +141,14 @@ def resolve_parameters(
         )
     env["CAP_LASER_WAIST_M"] = repr(expected_waist_m)
 
-    resolved = dict(BASE.resolve_parameters(env))
+    # The shared corrected-capillary template still exposes its historical
+    # diameter convention. Adapt only its private input contract while the
+    # baseline wrapper keeps and records the corrected PICMI-w0 convention.
+    base_env = dict(env)
+    base_env["CAP_INPUT_CONVENTIONS_ACK"] = BASE.REQUIRED_CONVENTION_ACK
+    base_env["CAP_LASER_SPOT_DEFINITION"] = "diameter_1e2_intensity"
+
+    resolved = dict(BASE.resolve_parameters(base_env))
     if not math.isclose(
         float(resolved["laser_waist_radius_m"]),
         expected_waist_m,
@@ -162,7 +191,7 @@ def resolve_parameters(
                 "clpu_carlos_plateau_quasiparabolic_hydrogen_"
                 "baseline_soft50_dual_exit_picmi_w0_v2"
             ),
-            "laser_spot_definition": "picmi_waist_w0_1e2_intensity",
+            "laser_spot_definition": BASELINE_LASER_SPOT_DEFINITION,
             "input_conventions_ack": BASELINE_LASER_WAIST_CONVENTION,
             "laser_spot_document_value_m": expected_waist_m,
             "laser_waist_radius_m": expected_waist_m,
