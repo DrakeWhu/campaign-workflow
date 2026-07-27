@@ -58,6 +58,30 @@ class ClpuBaselineSoft50Test(unittest.TestCase):
             "CAP_LASER_INTENSITY_FWHM_S": "30e-15",
         }
 
+    def test_single_species_soft50_curve_contract(self) -> None:
+        campaign = json.loads(CAMPAIGN.read_text(encoding="utf-8"))
+        outputs = {
+            output["name"]: output
+            for output in campaign["analysis"]["outputs"]
+        }
+
+        for name in (
+            "particle_plateau_soft50_curves",
+            "particle_capillary_soft50_curves",
+        ):
+            self.assertEqual(outputs[name]["min_rows"], 2)
+            self.assertEqual(
+                outputs[name]["required_columns"],
+                [
+                    "species_scope",
+                    "soft50_energy_low_MeV",
+                    "charge_soft50_pC",
+                    "n_effective_soft50",
+                    "energy_p90_soft50_MeV",
+                    "energy_relative_spread_rms_soft50",
+                ],
+            )
+
     def test_campaign_uses_prepared_input_template_name(self) -> None:
         campaign = json.loads(CAMPAIGN.read_text(encoding="utf-8"))
         self.assertEqual(
