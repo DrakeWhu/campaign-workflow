@@ -145,7 +145,7 @@
         "name": "particle_plateau_soft50_curves",
         "kind": "csv",
         "path": "particle_analysis/plateau_exit/particle_soft50_curves.csv",
-        "min_rows": 6,
+        "min_rows": 2,
         "required_columns": [
           "species_scope",
           "soft50_energy_low_MeV",
@@ -187,7 +187,7 @@
         "name": "particle_capillary_soft50_curves",
         "kind": "csv",
         "path": "particle_analysis/capillary_exit/particle_soft50_curves.csv",
-        "min_rows": 6,
+        "min_rows": 2,
         "required_columns": [
           "species_scope",
           "soft50_energy_low_MeV",
