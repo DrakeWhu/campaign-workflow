@@ -43,9 +43,12 @@ class ClpuBaselineSoft50Test(unittest.TestCase):
         return {
             "CAP_REQUIRE_CONVENTION_ACK": "true",
             "CAP_INPUT_CONVENTIONS_ACK": (
-                "clpu_spot_diameter_and_30fs_intensity_fwhm_v1"
+                "clpu_document_spot_values_are_picmi_w0_"
+                "and_30fs_intensity_fwhm_v2"
             ),
-            "CAP_LASER_SPOT_DEFINITION": "diameter_1e2_intensity",
+            "CAP_LASER_SPOT_DEFINITION": (
+                "picmi_waist_w0_1e2_intensity"
+            ),
             "CAP_NITROGEN_DOPANT_FRACTION": "0",
             "CAP_LASER_CASE": "f32",
             "CAP_N0_CM3": "5.5e18",
@@ -91,6 +94,17 @@ class ClpuBaselineSoft50Test(unittest.TestCase):
         self.assertEqual(
             campaign["case_materialization"]["input_name"],
             "input.py",
+        )
+
+        constants = campaign["case_materialization"]["env_constants"]
+        self.assertEqual(
+            constants["CAP_INPUT_CONVENTIONS_ACK"],
+            "clpu_document_spot_values_are_picmi_w0_"
+            "and_30fs_intensity_fwhm_v2",
+        )
+        self.assertEqual(
+            constants["CAP_LASER_SPOT_DEFINITION"],
+            "picmi_waist_w0_1e2_intensity",
         )
 
     def test_materialized_input_resolves_base_via_workflow_root(self) -> None:
