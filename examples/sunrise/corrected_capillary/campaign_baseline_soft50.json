@@ -35,8 +35,8 @@
       "CAP_LONG_PROFILE": "both",
       "CAP_NITROGEN_DOPANT_FRACTION": "0",
       "CAP_REQUIRE_CONVENTION_ACK": "true",
-      "CAP_INPUT_CONVENTIONS_ACK": "clpu_spot_diameter_and_30fs_intensity_fwhm_v1",
-      "CAP_LASER_SPOT_DEFINITION": "diameter_1e2_intensity",
+      "CAP_INPUT_CONVENTIONS_ACK": "clpu_document_spot_values_are_picmi_w0_and_30fs_intensity_fwhm_v2",
+      "CAP_LASER_SPOT_DEFINITION": "picmi_waist_w0_1e2_intensity",
       "CAP_TARGET_FIELD_FRAMES": "48",
       "CAP_MAX_RADIAL_CELL_M": "1.5e-6"
     }
