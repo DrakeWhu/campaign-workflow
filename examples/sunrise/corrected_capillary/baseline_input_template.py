@@ -10,6 +10,14 @@ from types import ModuleType
 from typing import Any, Mapping
 
 
+BASELINE_LASER_WAISTS_M = {
+    "f20": 26.0e-6,
+    "f32": 42.0e-6,
+    "f40": 52.0e-6,
+}
+BASELINE_LASER_WAIST_CONVENTION = "clpu_document_spot_values_are_picmi_w0_v1"
+
+
 def _load_base_module() -> ModuleType:
     this_file = Path(__file__).resolve()
     candidates: list[Path] = []
@@ -89,7 +97,37 @@ def resolve_parameters(
         )
     env["CAP_NITROGEN_DOPANT_FRACTION"] = "0"
 
+    laser_case = str(env.get("CAP_LASER_CASE", "f32")).strip().lower()
+    if laser_case not in BASELINE_LASER_WAISTS_M:
+        raise ValueError(
+            "baseline campaign requires CAP_LASER_CASE in "
+            f"{sorted(BASELINE_LASER_WAISTS_M)}"
+        )
+    expected_waist_m = BASELINE_LASER_WAISTS_M[laser_case]
+    requested_waist_m = float(
+        env.get("CAP_LASER_WAIST_M", expected_waist_m) or expected_waist_m
+    )
+    if not math.isclose(
+        requested_waist_m,
+        expected_waist_m,
+        rel_tol=1.0e-12,
+        abs_tol=1.0e-18,
+    ):
+        raise ValueError(
+            "baseline campaign requires the CLPU document spot value to be "
+            f"passed directly as PICMI w0: {laser_case}={expected_waist_m:.12g} m"
+        )
+    env["CAP_LASER_WAIST_M"] = repr(expected_waist_m)
+
     resolved = dict(BASE.resolve_parameters(env))
+    if not math.isclose(
+        float(resolved["laser_waist_radius_m"]),
+        expected_waist_m,
+        rel_tol=1.0e-12,
+        abs_tol=1.0e-18,
+    ):
+        raise RuntimeError("baseline PICMI waist contract was not preserved")
+
     step_distance_m = float(resolved["moving_window_step_distance_m"])
     max_steps = int(resolved["max_steps"])
 
@@ -119,10 +157,17 @@ def resolve_parameters(
 
     resolved.update(
         {
-            "schema_version": 4,
+            "schema_version": 5,
             "physics_model_id": (
                 "clpu_carlos_plateau_quasiparabolic_hydrogen_"
-                "baseline_soft50_dual_exit_v1"
+                "baseline_soft50_dual_exit_picmi_w0_v2"
+            ),
+            "laser_spot_definition": "picmi_waist_w0_1e2_intensity",
+            "input_conventions_ack": BASELINE_LASER_WAIST_CONVENTION,
+            "laser_spot_document_value_m": expected_waist_m,
+            "laser_waist_radius_m": expected_waist_m,
+            "laser_waist_contract": (
+                "CLPU_26_42_52um_values_passed_directly_to_PICMI_waist_w0"
             ),
             "nitrogen_fraction_atomic_nuclei": 0.0,
             "nitrogen_initial_charge_state": None,
