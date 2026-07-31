@@ -44,12 +44,10 @@ class ChainArgs:
     time: str
     nodes: int
     ntasks: int
-    mem: str
     tick_partition: str
     tick_time: str
     tick_nodes: int
     tick_ntasks: int
-    tick_mem: str
     execute: bool
     optimization_config: Path | None
     array_script: Path
@@ -80,12 +78,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time", default="06:00:00")
     parser.add_argument("--nodes", type=int, default=1)
     parser.add_argument("--ntasks", type=int, default=24)
-    parser.add_argument("--mem", default="64G")
     parser.add_argument("--tick-partition", default=None)
     parser.add_argument("--tick-time", default=None)
     parser.add_argument("--tick-nodes", type=int, default=None)
     parser.add_argument("--tick-ntasks", type=int, default=None)
-    parser.add_argument("--tick-mem", default=None)
     parser.add_argument("--optimization-config", type=Path, default=None)
     parser.add_argument(
         "--array-script",
@@ -171,12 +167,10 @@ def resolve_args(raw: argparse.Namespace) -> ChainArgs:
         time=str(raw.time),
         nodes=int(raw.nodes),
         ntasks=int(raw.ntasks),
-        mem=str(raw.mem),
         tick_partition=str(raw.tick_partition or raw.partition),
         tick_time=str(raw.tick_time or raw.time),
         tick_nodes=int(raw.tick_nodes or raw.nodes),
         tick_ntasks=int(raw.tick_ntasks or raw.ntasks),
-        tick_mem=str(raw.tick_mem or raw.mem),
         execute=bool(raw.execute),
         optimization_config=optimization_config,
         array_script=array_script,
@@ -366,13 +360,11 @@ def common_sbatch_prefix(
         time = args.time
         nodes = args.nodes
         ntasks = args.ntasks
-        mem = args.mem
     elif job_kind == "tick":
         partition = args.tick_partition
         time = args.tick_time
         nodes = args.tick_nodes
         ntasks = args.tick_ntasks
-        mem = args.tick_mem
     else:
         raise ValueError(f"unsupported sbatch job kind: {job_kind!r}")
 
@@ -383,7 +375,6 @@ def common_sbatch_prefix(
         f"--time={time}",
         f"--nodes={nodes}",
         f"--ntasks={ntasks}",
-        f"--mem={mem}",
         f"--job-name={job_name}",
     ]
 
@@ -533,13 +524,11 @@ def build_manifest(
         "time": args.time,
         "nodes": args.nodes,
         "ntasks": args.ntasks,
-        "mem": args.mem,
         "tick_resources": {
             "partition": args.tick_partition,
             "time": args.tick_time,
             "nodes": args.tick_nodes,
             "ntasks": args.tick_ntasks,
-            "mem": args.tick_mem,
         },
         "array_script": str(args.array_script),
         "tick_script": str(args.tick_script),
