@@ -62,20 +62,27 @@ class SunriseMorboChainTests(unittest.TestCase):
             "1",
             "--ntasks",
             "24",
-            "--mem",
-            "64G",
         ]
 
-    def test_static_sbatch_scripts_exist_and_do_not_call_sbatch(self) -> None:
+    def test_static_sbatch_scripts_exist_without_memory_limits_or_nested_sbatch(
+        self,
+    ) -> None:
         array_script = Path("examples/sunrise/run_iteration_array.sh")
         tick_script = Path("examples/sunrise/run_optimizer_tick_materialize_only.sh")
+        case_cycle_script = Path("examples/sunrise/submit_case_cycle_array.sh")
         submit_script = Path("examples/sunrise/submit_morbo_chain.py")
 
-        for path in (array_script, tick_script, submit_script):
+        for path in (
+            array_script,
+            tick_script,
+            case_cycle_script,
+            submit_script,
+        ):
             with self.subTest(path=str(path)):
                 self.assertTrue(path.is_file())
                 text = path.read_text(encoding="utf-8")
                 self.assertNotIn("\r\n", text)
+                self.assertNotIn("--mem", text)
 
         array_text = array_script.read_text(encoding="utf-8")
         tick_text = tick_script.read_text(encoding="utf-8")
@@ -113,6 +120,10 @@ class SunriseMorboChainTests(unittest.TestCase):
         self.assertIsNone(data["jobs"][0]["dependency"])
         self.assertEqual(data["jobs"][1]["dependency"], "afterok:A_002")
         self.assertEqual(data["jobs"][2]["dependency"], "afterok:T_002")
+        for job in data["jobs"]:
+            self.assertFalse(
+                any(part.startswith("--mem") for part in job["submit_command"])
+            )
 
     def test_custom_case_runner_and_lightweight_tick_resources_are_propagated(
         self,
@@ -131,8 +142,6 @@ class SunriseMorboChainTests(unittest.TestCase):
             "00:30:00",
             "--tick-ntasks",
             "1",
-            "--tick-mem",
-            "8G",
         ]
         with patch.dict(os.environ, {}, clear=True):
             with contextlib.redirect_stdout(stdout):
@@ -145,8 +154,9 @@ class SunriseMorboChainTests(unittest.TestCase):
         self.assertIn(f"CW_CASE_RUNNER={case_runner}", " ".join(array_command))
         self.assertIn("--time=00:30:00", tick_command)
         self.assertIn("--ntasks=1", tick_command)
-        self.assertIn("--mem=8G", tick_command)
         self.assertIn("--ntasks=24", array_command)
+        self.assertFalse(any(part.startswith("--mem") for part in array_command))
+        self.assertFalse(any(part.startswith("--mem") for part in tick_command))
 
     def test_initial_dependency_gates_only_the_first_array(self) -> None:
         tmp, root, workflow_env = self._make_root()
@@ -257,6 +267,9 @@ class SunriseMorboChainTests(unittest.TestCase):
         self.assertIn("--dependency=afterok:103", commands[4])
         self.assertIn("--dependency=afterok:104", commands[5])
 
+        for command in commands:
+            self.assertFalse(any(part.startswith("--mem") for part in command))
+
         self.assertTrue(commands[0][-1].endswith("run_iteration_array.sh"))
         self.assertTrue(
             commands[1][-1].endswith("run_optimizer_tick_materialize_only.sh")
@@ -279,6 +292,8 @@ class SunriseMorboChainTests(unittest.TestCase):
         self.assertTrue(manifest_path.is_file())
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(manifest["jobs"][2]["dependency"], "afterok:101")
+        self.assertNotIn("mem", manifest)
+        self.assertNotIn("mem", manifest["tick_resources"])
 
     def test_refuses_to_run_from_inside_slurm_job(self) -> None:
         tmp, root, workflow_env = self._make_root()
