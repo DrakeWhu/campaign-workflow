@@ -23,6 +23,8 @@ from campaign_workflow.core.transitions import mark_sim_done_transition, state_n
 from campaign_workflow.core.tsv_cases import CaseRecord, load_campaign_config, load_cases
 
 OPERATION = "mark_sim_done"
+RUNTIME_EVIDENCE_MODE = "runtime_success_receipt"
+ADOPTION_EVIDENCE_MODE = "historical_adoption"
 
 ALREADY_SIM_DONE_OR_LATER_STATES = {
     "Sim_done",
@@ -36,10 +38,29 @@ ALREADY_SIM_DONE_OR_LATER_STATES = {
     "Cleanup_failed",
 }
 
+RUNTIME_IDENTITY_FIELDS = (
+    "scheduler",
+    "scheduler_job_id",
+    "scheduler_array_task_id",
+    "run_command",
+    "environment_name",
+    "stdout_log",
+    "stderr_log",
+)
+
+REQUIRED_RUNTIME_RECEIPT_FIELDS = (
+    "scheduler_job_id",
+    "scheduler_array_task_id",
+    "run_command",
+)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Backfill Sim_done state for cases that already have completion evidence."
+        description=(
+            "Mark Sim_done either from a matching runtime-success receipt or by "
+            "explicit historical adoption of existing completion evidence."
+        )
     )
 
     parser.add_argument(
@@ -54,7 +75,47 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         action="append",
         default=None,
-        help="Restrict operation to one case ID. Can be passed multiple times.",
+        help="Restrict operation to one case ID. Can be passed multiple times for adoption.",
+    )
+
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
+        "--runtime-success-receipt",
+        action="store_true",
+        help=(
+            "Finalize the current Running execution. Requires return_code=0 and "
+            "identity matching the existing mark_sim_running evidence."
+        ),
+    )
+    mode.add_argument(
+        "--adopt-existing-evidence",
+        action="store_true",
+        help=(
+            "Explicitly backfill/adopt historical completion evidence. Existing raw "
+            "diagnostics or a valid legacy completion marker may be used."
+        ),
+    )
+
+    parser.add_argument("--scheduler", default=None, help="Scheduler/backend name, e.g. slurm.")
+    parser.add_argument("--scheduler-job-id", default=None, help="Scheduler job ID for the current execution.")
+    parser.add_argument(
+        "--scheduler-array-task-id",
+        default=None,
+        help="Scheduler array task ID for the current execution.",
+    )
+    parser.add_argument(
+        "--run-command",
+        default=None,
+        help="Command used to run the current simulation execution.",
+    )
+    parser.add_argument("--environment-name", default=None, help="Simulation environment name.")
+    parser.add_argument("--stdout-log", default=None, help="Case-relative stdout log path.")
+    parser.add_argument("--stderr-log", default=None, help="Case-relative stderr log path.")
+    parser.add_argument(
+        "--return-code",
+        type=int,
+        default=None,
+        help="Simulation process return code. Runtime success requires exactly 0.",
     )
 
     parser.add_argument(
@@ -92,6 +153,24 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         cases = [case for case in cases if case.case_id in selected_ids]
 
+    if args.runtime_success_receipt and len(cases) != 1:
+        print(
+            "ERROR: --runtime-success-receipt requires exactly one selected case",
+            file=sys.stderr,
+        )
+        return 1
+
+    runtime_receipt: dict[str, Any] | None = None
+    evidence_mode = ADOPTION_EVIDENCE_MODE
+    if args.runtime_success_receipt:
+        evidence_mode = RUNTIME_EVIDENCE_MODE
+        runtime_receipt = _runtime_receipt_from_args(args, config)
+        receipt_errors = _validate_runtime_receipt_shape(runtime_receipt)
+        if receipt_errors:
+            for error in receipt_errors:
+                print(f"ERROR: {error}", file=sys.stderr)
+            return 1
+
     total_errors = 0
     cases_with_errors = 0
     cases_marked = 0
@@ -102,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"campaign_root={campaign_root}")
     print(f"campaign_name={config.get('campaign_name')}")
     print(f"selected_cases={len(cases)}")
+    print(f"evidence_mode={evidence_mode}")
 
     for case in cases:
         result = mark_one_case_sim_done(
@@ -109,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             case=case,
             dry_run=args.dry_run,
+            evidence_mode=evidence_mode,
+            runtime_receipt=runtime_receipt,
         )
 
         errors = result["errors"]
@@ -130,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[case {case.case_id}] {case.case_name}")
             print(f"  current_state={result.get('current_state')}")
             print(f"  target_state={result.get('target_state')}")
+            print(f"  evidence_mode={result.get('evidence_mode')}")
             print(f"  evidence_ok={result.get('evidence_ok')}")
             print(f"  already_done={result.get('already_done')}")
 
@@ -169,6 +252,8 @@ def mark_one_case_sim_done(
     config: dict[str, Any],
     case: CaseRecord,
     dry_run: bool,
+    evidence_mode: str,
+    runtime_receipt: dict[str, Any] | None,
 ) -> dict[str, Any]:
     layout = get_state_layout(config)
     case_dir = campaign_root / case.case_name
@@ -181,6 +266,7 @@ def mark_one_case_sim_done(
         "case_dir": str(case_dir),
         "current_state": None,
         "target_state": None,
+        "evidence_mode": evidence_mode,
         "evidence_ok": False,
         "already_done": False,
         "would_mark": False,
@@ -223,13 +309,37 @@ def mark_one_case_sim_done(
         result["actions"].append(f"state already at or after Sim_done: {current}")
         return result
 
-    if current not in {"Created", "Running"}:
-        result["errors"].append(
-            f"cannot mark simulation done from state {current!r}; expected one of: Created, Running"
+    if evidence_mode == RUNTIME_EVIDENCE_MODE:
+        if current != "Running":
+            result["errors"].append(
+                f"runtime completion requires state 'Running', got {current!r}"
+            )
+            return result
+        if runtime_receipt is None:
+            result["errors"].append("runtime completion is missing its success receipt")
+            return result
+        evidence = collect_runtime_success_evidence(
+            case_dir=case_dir,
+            case=case,
+            validation_doc=validation_doc,
+            runtime_receipt=runtime_receipt,
         )
+    elif evidence_mode == ADOPTION_EVIDENCE_MODE:
+        if current not in {"Created", "Running"}:
+            result["errors"].append(
+                f"historical adoption cannot mark simulation done from state {current!r}; "
+                "expected one of: Created, Running"
+            )
+            return result
+        evidence = collect_sim_done_evidence(
+            case_dir=case_dir,
+            config=config,
+            case=case,
+        )
+    else:
+        result["errors"].append(f"unknown completion evidence mode: {evidence_mode!r}")
         return result
 
-    evidence = collect_sim_done_evidence(case_dir=case_dir, config=config)
     result["evidence_ok"] = evidence["ok"]
     result["evidence"] = evidence["evidence"]
     result["warnings"] = evidence["warnings"]
@@ -242,33 +352,40 @@ def mark_one_case_sim_done(
     marker_rel = _completion_marker_path(config)
     marker_path = case_dir / marker_rel
 
-    reason = (
-        "completion evidence found for running simulation case"
-        if current == "Running"
-        else "completion evidence found for existing campaign case"
-    )
+    if evidence_mode == RUNTIME_EVIDENCE_MODE:
+        reason = "matching runtime execution receipt confirms successful simulation completion"
+        note_message = "Simulation marked as done from matching runtime success evidence."
+    else:
+        reason = "historical completion evidence deliberately adopted"
+        note_message = "Simulation marked as done by explicit historical evidence adoption."
+
     updated_state = mark_sim_done_transition(
         state_doc,
         reason=reason,
     )
 
-    marker_doc = {
+    marker_doc: dict[str, Any] = {
         "schema_version": 1,
         "ok": True,
         "operation": OPERATION,
         "case_id": case.case_id,
         "case_name": case.case_name,
         "finished_at": timestamp,
-        "return_code": 0,
+        "evidence_mode": evidence_mode,
         "evidence": evidence["evidence"],
         "warnings": evidence["warnings"],
         "errors": [],
         "destructive_operations": 0,
     }
+    if evidence_mode == RUNTIME_EVIDENCE_MODE:
+        marker_doc["return_code"] = 0
+        marker_doc["runtime_receipt"] = dict(runtime_receipt or {})
+    else:
+        marker_doc["adopted_existing_evidence"] = True
 
     updated_validation = copy.deepcopy(validation_doc)
     updated_validation["updated_at"] = timestamp
-    updated_validation["simulation"] = {
+    simulation_evidence: dict[str, Any] = {
         "schema_version": 1,
         "ok": True,
         "marked_at": timestamp,
@@ -276,6 +393,7 @@ def mark_one_case_sim_done(
         "state_from": current,
         "state_to": "Sim_done",
         "marker_path": marker_rel.as_posix(),
+        "evidence_mode": evidence_mode,
         "evidence": evidence["evidence"],
         "warnings": evidence["warnings"],
         "errors": [],
@@ -288,8 +406,16 @@ def mark_one_case_sim_done(
             "state_to": "Sim_done",
             "timestamp": timestamp,
             "marker_path": marker_rel.as_posix(),
+            "evidence_mode": evidence_mode,
         },
     }
+    if evidence_mode == RUNTIME_EVIDENCE_MODE:
+        simulation_evidence["return_code"] = 0
+        simulation_evidence["runtime_receipt"] = dict(runtime_receipt or {})
+    else:
+        simulation_evidence["adopted_existing_evidence"] = True
+
+    updated_validation["simulation"] = simulation_evidence
 
     cleanup = updated_validation.setdefault("cleanup", {})
     if isinstance(cleanup, dict):
@@ -313,7 +439,8 @@ def mark_one_case_sim_done(
             {
                 "timestamp": timestamp,
                 "operation": OPERATION,
-                "message": "Simulation marked as done from existing completion evidence.",
+                "evidence_mode": evidence_mode,
+                "message": note_message,
             }
         )
 
@@ -331,7 +458,107 @@ def mark_one_case_sim_done(
     return result
 
 
-def collect_sim_done_evidence(*, case_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
+def collect_runtime_success_evidence(
+    *,
+    case_dir: Path,
+    case: CaseRecord,
+    validation_doc: dict[str, Any],
+    runtime_receipt: dict[str, Any],
+) -> dict[str, Any]:
+    evidence: list[str] = []
+    warnings: list[str] = []
+    errors: list[str] = []
+
+    if runtime_receipt.get("return_code") != 0:
+        errors.append(
+            f"runtime success receipt requires return_code=0, got {runtime_receipt.get('return_code')!r}"
+        )
+
+    simulation = validation_doc.get("simulation")
+    running_evidence = simulation.get("mark_sim_running") if isinstance(simulation, dict) else None
+    if not isinstance(running_evidence, dict):
+        errors.append("missing validation.simulation.mark_sim_running runtime evidence")
+        return _evidence_result(evidence, warnings, errors)
+
+    if running_evidence.get("ok") is not True:
+        errors.append("validation.simulation.mark_sim_running is not successful")
+    if running_evidence.get("operation") != "mark_sim_running":
+        errors.append("validation.simulation.mark_sim_running has unexpected operation")
+    if running_evidence.get("state_to") != "Running":
+        errors.append("validation.simulation.mark_sim_running does not target Running")
+
+    marker_raw = running_evidence.get("marker_path", "post/sim_running.json")
+    try:
+        marker_rel = validate_relative_path(marker_raw, label="mark_sim_running.marker_path")
+        marker_path = resolve_existing_path_inside_case(
+            case_dir,
+            marker_rel,
+            label="mark_sim_running.marker_path",
+        )
+        running_marker = read_json(marker_path)
+    except Exception as exc:
+        errors.append(f"failed to read current running marker: {exc}")
+        return _evidence_result(evidence, warnings, errors)
+
+    if not isinstance(running_marker, dict):
+        errors.append("current running marker is not a JSON object")
+        return _evidence_result(evidence, warnings, errors)
+
+    if running_marker.get("ok") is not True:
+        errors.append("current running marker is not successful")
+    if running_marker.get("operation") != "mark_sim_running":
+        errors.append("current running marker has unexpected operation")
+    if running_marker.get("case_id") != case.case_id:
+        errors.append(
+            f"current running marker case_id mismatch: expected {case.case_id}, "
+            f"got {running_marker.get('case_id')!r}"
+        )
+    if running_marker.get("case_name") != case.case_name:
+        errors.append(
+            f"current running marker case_name mismatch: expected {case.case_name!r}, "
+            f"got {running_marker.get('case_name')!r}"
+        )
+
+    running_started = running_evidence.get("started_at")
+    marker_started = running_marker.get("started_at")
+    if running_started is not None and marker_started is not None and running_started != marker_started:
+        errors.append("running marker timestamp does not match validation runtime evidence")
+
+    for field in RUNTIME_IDENTITY_FIELDS:
+        observed = runtime_receipt.get(field)
+        if observed is None:
+            continue
+        validation_value = running_evidence.get(field)
+        marker_value = running_marker.get(field)
+        if validation_value != observed:
+            errors.append(
+                f"runtime receipt {field} mismatch with validation mark_sim_running: "
+                f"receipt={observed!r}, running={validation_value!r}"
+            )
+        if marker_value != observed:
+            errors.append(
+                f"runtime receipt {field} mismatch with running marker: "
+                f"receipt={observed!r}, marker={marker_value!r}"
+            )
+
+    if not errors:
+        evidence.append("runtime return_code=0")
+        evidence.append(
+            "runtime identity matches mark_sim_running evidence: "
+            f"scheduler_job_id={runtime_receipt.get('scheduler_job_id')} "
+            f"scheduler_array_task_id={runtime_receipt.get('scheduler_array_task_id')}"
+        )
+        evidence.append(f"running marker identity matches case: {marker_rel.as_posix()}")
+
+    return _evidence_result(evidence, warnings, errors)
+
+
+def collect_sim_done_evidence(
+    *,
+    case_dir: Path,
+    config: dict[str, Any],
+    case: CaseRecord,
+) -> dict[str, Any]:
     evidence: list[str] = []
     warnings: list[str] = []
     errors: list[str] = []
@@ -348,19 +575,29 @@ def collect_sim_done_evidence(*, case_dir: Path, config: dict[str, Any]) -> dict
                     marker_rel,
                     label="simulation.completion_marker",
                 )
-                if resolved.is_file():
-                    marker_ok = True
-                    evidence.append(f"completion marker exists: {marker_rel.as_posix()}")
-                else:
+                if not resolved.is_file():
                     warnings.append(
                         f"completion marker exists but is not a regular file: {marker_rel.as_posix()}"
                     )
+                else:
+                    marker_doc = read_json(resolved)
+                    marker_errors = _validate_adoptable_completion_marker(marker_doc, case)
+                    if marker_errors:
+                        for error in marker_errors:
+                            warnings.append(
+                                f"completion marker rejected: {marker_rel.as_posix()}: {error}"
+                            )
+                    else:
+                        marker_ok = True
+                        evidence.append(
+                            f"valid historical completion marker: {marker_rel.as_posix()}"
+                        )
             else:
                 warnings.append(f"completion marker not found: {marker_rel.as_posix()}")
         except PathSafetyError as exc:
             errors.append(str(exc))
         except Exception as exc:
-            errors.append(f"failed to check completion marker {marker!r}: {exc}")
+            warnings.append(f"completion marker rejected: {marker!r}: {exc}")
 
     raw_ok = False
     raw_diagnostics = config.get("raw_diagnostics")
@@ -412,14 +649,67 @@ def collect_sim_done_evidence(*, case_dir: Path, config: dict[str, Any]) -> dict
 
     ok = marker_ok or raw_ok
     if not ok:
-        errors.append("no acceptable simulation completion evidence found")
+        errors.append("no acceptable historical simulation completion evidence found")
 
+    return _evidence_result(evidence, warnings, errors)
+
+
+def _runtime_receipt_from_args(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    sim = config.get("simulation")
+    sim = sim if isinstance(sim, dict) else {}
     return {
-        "ok": ok,
-        "evidence": evidence,
-        "warnings": warnings,
-        "errors": errors,
+        "scheduler": args.scheduler or sim.get("scheduler"),
+        "scheduler_job_id": args.scheduler_job_id,
+        "scheduler_array_task_id": args.scheduler_array_task_id,
+        "run_command": args.run_command,
+        "environment_name": args.environment_name or sim.get("environment_name"),
+        "stdout_log": args.stdout_log,
+        "stderr_log": args.stderr_log,
+        "return_code": args.return_code,
     }
+
+
+def _validate_runtime_receipt_shape(receipt: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if receipt.get("return_code") != 0:
+        errors.append(
+            f"--runtime-success-receipt requires --return-code 0, got {receipt.get('return_code')!r}"
+        )
+    for field in REQUIRED_RUNTIME_RECEIPT_FIELDS:
+        value = receipt.get(field)
+        if value is None or str(value).strip() == "":
+            errors.append(f"--runtime-success-receipt requires non-empty {field}")
+    return errors
+
+
+def _validate_adoptable_completion_marker(
+    marker_doc: Any,
+    case: CaseRecord,
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(marker_doc, dict):
+        return ["marker is not a JSON object"]
+    if marker_doc.get("ok") is not True:
+        errors.append("marker ok is not true")
+    if marker_doc.get("operation") != OPERATION:
+        errors.append(f"marker operation is not {OPERATION!r}")
+    if marker_doc.get("case_id") != case.case_id:
+        errors.append(
+            f"marker case_id mismatch: expected {case.case_id}, got {marker_doc.get('case_id')!r}"
+        )
+    if marker_doc.get("case_name") != case.case_name:
+        errors.append(
+            f"marker case_name mismatch: expected {case.case_name!r}, "
+            f"got {marker_doc.get('case_name')!r}"
+        )
+    if "return_code" in marker_doc and marker_doc.get("return_code") != 0:
+        errors.append(
+            f"marker return_code is not zero: {marker_doc.get('return_code')!r}"
+        )
+    return errors
 
 
 def _completion_marker_path(config: dict[str, Any]) -> Path:
@@ -427,6 +717,19 @@ def _completion_marker_path(config: dict[str, Any]) -> Path:
     if not isinstance(marker, str) or not marker.strip():
         marker = "post/sim_done.json"
     return validate_relative_path(marker, label="simulation.completion_marker")
+
+
+def _evidence_result(
+    evidence: list[str],
+    warnings: list[str],
+    errors: list[str],
+) -> dict[str, Any]:
+    return {
+        "ok": not errors,
+        "evidence": evidence,
+        "warnings": warnings,
+        "errors": errors,
+    }
 
 
 def _nonnegative_int(value: Any, label: str) -> int:

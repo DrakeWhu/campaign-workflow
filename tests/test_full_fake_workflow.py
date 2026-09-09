@@ -92,10 +92,39 @@ class FullFakeWorkflowIntegrationTests(unittest.TestCase):
         self._simulate_external_raw_output(case_dir)
         self.assertTrue(raw_file.exists())
 
-        rc = mark_sim_done_main(["--campaign-root", str(self.root), "--case-id", "0"])
+        rc = mark_sim_done_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--runtime-success-receipt",
+                "--scheduler",
+                "fake-slurm",
+                "--scheduler-job-id",
+                "12345",
+                "--scheduler-array-task-id",
+                "0",
+                "--run-command",
+                "fake-srun python input.py",
+                "--environment-name",
+                "fake-warpx-env",
+                "--stdout-log",
+                "logs/sim.out",
+                "--stderr-log",
+                "logs/sim.err",
+                "--return-code",
+                "0",
+            ]
+        )
         self.assertEqual(rc, 0)
         self.assertEqual(read_json(case_dir / "state.json")["state"], "Sim_done")
         self.assertTrue((case_dir / "post/sim_done.json").exists())
+
+        sim_done = read_json(case_dir / "post/sim_done.json")
+        self.assertEqual(sim_done["evidence_mode"], "runtime_success_receipt")
+        self.assertEqual(sim_done["return_code"], 0)
+        self.assertEqual(sim_done["runtime_receipt"]["scheduler_job_id"], "12345")
 
         rc = validate_raw_case_main(["--campaign-root", str(self.root), "--case-id", "0"])
         self.assertEqual(rc, 0)

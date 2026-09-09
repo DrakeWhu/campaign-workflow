@@ -134,9 +134,11 @@ run_phase() {
     echo "[LYNX-CASE-CYCLE] stdout=${stdout_log}"
     echo "[LYNX-CASE-CYCLE] stderr=${stderr_log}"
 
-    "$@" > >(tee -a "${stdout_log}") 2> >(tee -a "${stderr_log}" >&2)
+    local phase_rc=0
+    "$@" > >(tee -a "${stdout_log}") 2> >(tee -a "${stderr_log}" >&2) || phase_rc=$?
 
-    echo "[LYNX-CASE-CYCLE] END phase=${phase_name}"
+    echo "[LYNX-CASE-CYCLE] END phase=${phase_name} return_code=${phase_rc}"
+    return "${phase_rc}"
 }
 
 load_workflow_env() {
@@ -202,6 +204,15 @@ run_phase mark_sim_done \
     python -m campaign_workflow.cli.mark_sim_done \
         --campaign-root "${CAMPAIGN_ROOT}" \
         --case-id "${CASE_ID}" \
+        --runtime-success-receipt \
+        --scheduler slurm \
+        --scheduler-job-id "${SCHEDULER_JOB_ID}" \
+        --scheduler-array-task-id "${SCHEDULER_ARRAY_TASK_ID}" \
+        --run-command "${RUN_COMMAND}" \
+        --environment-name "warpx-26.03-py311" \
+        --stdout-log "${STDOUT_LOG}" \
+        --stderr-log "${STDERR_LOG}" \
+        --return-code "${SIM_RC}" \
         --verbose
 
 run_phase validate_raw_case \

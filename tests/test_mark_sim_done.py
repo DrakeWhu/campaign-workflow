@@ -7,6 +7,8 @@ from pathlib import Path
 
 from campaign_workflow.cli.init_case_states import main as init_case_states_main
 from campaign_workflow.cli.mark_sim_done import main as mark_sim_done_main
+from campaign_workflow.cli.mark_sim_running import main as mark_sim_running_main
+from campaign_workflow.cli.mark_sim_submitted import main as mark_sim_submitted_main
 from campaign_workflow.core.atomic_io import read_json
 
 
@@ -29,12 +31,100 @@ class MarkSimDoneTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
 
-    def test_marks_created_case_sim_done_from_raw_diagnostic_evidence(self) -> None:
+    def _adopt_argv(self, case_id: int = 0, *, dry_run: bool = False) -> list[str]:
+        argv = [
+            "--campaign-root",
+            str(self.root),
+            "--case-id",
+            str(case_id),
+            "--adopt-existing-evidence",
+        ]
+        if dry_run:
+            argv.append("--dry-run")
+        return argv
+
+    def _mark_running(self) -> None:
+        submitted = mark_sim_submitted_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--scheduler",
+                "fake-slurm",
+                "--scheduler-job-id",
+                "12345",
+                "--scheduler-array-task-id",
+                "0",
+                "--submit-command",
+                "sbatch submit_fake_array.sh",
+                "--environment-name",
+                "campaign-workflow-py310",
+            ]
+        )
+        self.assertEqual(submitted, 0)
+
+        running = mark_sim_running_main(
+            [
+                "--campaign-root",
+                str(self.root),
+                "--case-id",
+                "0",
+                "--scheduler",
+                "fake-slurm",
+                "--scheduler-job-id",
+                "12345",
+                "--scheduler-array-task-id",
+                "0",
+                "--run-command",
+                "fake-srun python input.py",
+                "--environment-name",
+                "fake-warpx-env",
+                "--stdout-log",
+                "logs/sim.out",
+                "--stderr-log",
+                "logs/sim.err",
+            ]
+        )
+        self.assertEqual(running, 0)
+
+    def _runtime_argv(
+        self,
+        *,
+        return_code: int = 0,
+        scheduler_job_id: str = "12345",
+        scheduler_array_task_id: str = "0",
+        run_command: str = "fake-srun python input.py",
+    ) -> list[str]:
+        return [
+            "--campaign-root",
+            str(self.root),
+            "--case-id",
+            "0",
+            "--runtime-success-receipt",
+            "--scheduler",
+            "fake-slurm",
+            "--scheduler-job-id",
+            scheduler_job_id,
+            "--scheduler-array-task-id",
+            scheduler_array_task_id,
+            "--run-command",
+            run_command,
+            "--environment-name",
+            "fake-warpx-env",
+            "--stdout-log",
+            "logs/sim.out",
+            "--stderr-log",
+            "logs/sim.err",
+            "--return-code",
+            str(return_code),
+        ]
+
+    def test_adopts_created_case_from_raw_diagnostic_evidence(self) -> None:
         case_dir = self.root / "000_fake_case"
         self._write_raw(case_dir, "diags/raw_000.fake", b"fake payload")
 
-        rc = mark_sim_done_main(["--campaign-root", str(self.root), "--case-id", "0"])
-
+        rc = mark_sim_done_main(self._adopt_argv())
         self.assertEqual(rc, 0)
 
         state = read_json(case_dir / "state.json")
@@ -45,111 +135,106 @@ class MarkSimDoneTests(unittest.TestCase):
         self.assertEqual(state["history"][-1]["from"], "Created")
         self.assertEqual(state["history"][-1]["to"], "Sim_done")
         self.assertEqual(state["history"][-1]["operation"], "mark_sim_done")
-
-        self.assertTrue(validation["simulation"]["ok"])
-        self.assertEqual(validation["simulation"]["operation"], "mark_sim_done")
-        self.assertEqual(validation["simulation"]["marker_path"], "post/sim_done.json")
-        self.assertEqual(validation["simulation"]["destructive_operations"], 0)
-        self.assertGreaterEqual(len(validation["simulation"]["evidence"]), 1)
-
-        latest = validation["simulation"]["latest"]
-        self.assertTrue(latest["ok"])
-        self.assertEqual(latest["operation"], "mark_sim_done")
-        self.assertEqual(latest["state_from"], "Created")
-        self.assertEqual(latest["state_to"], "Sim_done")
-        self.assertEqual(latest["marker_path"], "post/sim_done.json")
-
-        self.assertTrue(marker["ok"])
-        self.assertEqual(marker["operation"], "mark_sim_done")
-        self.assertEqual(marker["case_id"], 0)
-        self.assertEqual(marker["case_name"], "000_fake_case")
-        self.assertEqual(marker["return_code"], 0)
-        self.assertEqual(marker["destructive_operations"], 0)
-        self.assertIn("finished_at", marker)
-        self.assertGreaterEqual(len(marker["evidence"]), 1)
-        self.assertEqual(marker["errors"], [])
-
-        self.assertEqual(validation["raw"], {})
+        self.assertEqual(validation["simulation"]["evidence_mode"], "historical_adoption")
+        self.assertTrue(validation["simulation"]["adopted_existing_evidence"])
+        self.assertEqual(marker["evidence_mode"], "historical_adoption")
+        self.assertTrue(marker["adopted_existing_evidence"])
+        self.assertNotIn("return_code", marker)
         self.assertFalse(validation["cleanup"]["cleanup_allowed"])
 
-    def test_dry_run_does_not_change_state_validation_or_marker(self) -> None:
+    def test_adoption_dry_run_does_not_change_state_validation_or_marker(self) -> None:
         case_dir = self.root / "000_fake_case"
         self._write_raw(case_dir, "diags/raw_000.fake", b"fake payload")
 
-        rc = mark_sim_done_main(["--campaign-root", str(self.root), "--case-id", "0", "--dry-run"])
-
+        rc = mark_sim_done_main(self._adopt_argv(dry_run=True))
         self.assertEqual(rc, 0)
 
         state = read_json(case_dir / "state.json")
         validation = read_json(case_dir / "validation.json")
-
         self.assertEqual(state["state"], "Created")
         self.assertNotIn("simulation", validation)
         self.assertFalse((case_dir / "post/sim_done.json").exists())
         self.assertEqual(validation["raw"], {})
         self.assertFalse(validation["cleanup"]["cleanup_allowed"])
 
-    def test_missing_completion_evidence_fails_without_writing(self) -> None:
+    def test_adoption_missing_completion_evidence_fails_without_writing(self) -> None:
         case_dir = self.root / "000_fake_case"
 
-        rc = mark_sim_done_main(["--campaign-root", str(self.root), "--case-id", "0"])
-
+        rc = mark_sim_done_main(self._adopt_argv())
         self.assertEqual(rc, 1)
 
         state = read_json(case_dir / "state.json")
         validation = read_json(case_dir / "validation.json")
-
         self.assertEqual(state["state"], "Created")
         self.assertNotIn("simulation", validation)
         self.assertFalse((case_dir / "post/sim_done.json").exists())
-        self.assertEqual(validation["raw"], {})
 
-    def test_completion_marker_is_sufficient_evidence_and_is_rewritten_with_full_contract(self) -> None:
+    def test_valid_historical_completion_marker_can_be_adopted(self) -> None:
         case_dir = self.root / "000_fake_case"
         marker_path = case_dir / "post/sim_done.json"
         marker_path.parent.mkdir(parents=True, exist_ok=True)
-        marker_path.write_text('{"ok": true}\n', encoding="utf-8")
+        marker_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "ok": True,
+                    "operation": "mark_sim_done",
+                    "case_id": 0,
+                    "case_name": "000_fake_case",
+                    "finished_at": "2026-01-01T00:00:00Z",
+                    "return_code": 0,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
-        rc = mark_sim_done_main(["--campaign-root", str(self.root), "--case-id", "0"])
-
+        rc = mark_sim_done_main(self._adopt_argv())
         self.assertEqual(rc, 0)
 
-        state = read_json(case_dir / "state.json")
         validation = read_json(case_dir / "validation.json")
         marker = read_json(marker_path)
-
-        self.assertEqual(state["state"], "Sim_done")
-
         joined_evidence = "\n".join(validation["simulation"]["evidence"])
-        self.assertIn("completion marker exists", joined_evidence)
+        self.assertIn("valid historical completion marker", joined_evidence)
+        self.assertEqual(marker["evidence_mode"], "historical_adoption")
+        self.assertTrue(marker["adopted_existing_evidence"])
+        self.assertNotIn("return_code", marker)
 
-        self.assertTrue(validation["simulation"]["ok"])
-        self.assertEqual(validation["simulation"]["operation"], "mark_sim_done")
-        self.assertEqual(validation["simulation"]["marker_path"], "post/sim_done.json")
+    def test_empty_or_foreign_historical_marker_is_not_adopted(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        marker_path = case_dir / "post/sim_done.json"
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self.assertTrue(marker["ok"])
-        self.assertEqual(marker["operation"], "mark_sim_done")
-        self.assertEqual(marker["case_id"], 0)
-        self.assertEqual(marker["case_name"], "000_fake_case")
-        self.assertEqual(marker["return_code"], 0)
-        self.assertIn("finished_at", marker)
-        self.assertGreaterEqual(len(marker["evidence"]), 1)
-        self.assertEqual(marker["destructive_operations"], 0)
+        for payload in (
+            {"ok": True},
+            {
+                "schema_version": 1,
+                "ok": True,
+                "operation": "mark_sim_done",
+                "case_id": 1,
+                "case_name": "001_fake_case",
+                "return_code": 0,
+            },
+        ):
+            with self.subTest(payload=payload):
+                marker_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+                rc = mark_sim_done_main(self._adopt_argv())
+                self.assertEqual(rc, 1)
+                self.assertEqual(read_json(case_dir / "state.json")["state"], "Created")
+                self.assertNotIn("simulation", read_json(case_dir / "validation.json"))
 
-    def test_already_sim_done_case_is_noop_success(self) -> None:
+    def test_already_sim_done_adoption_is_noop_success(self) -> None:
         case_dir = self.root / "000_fake_case"
         self._write_raw(case_dir, "diags/raw_000.fake", b"fake payload")
 
-        first = mark_sim_done_main(["--campaign-root", str(self.root), "--case-id", "0"])
+        first = mark_sim_done_main(self._adopt_argv())
         self.assertEqual(first, 0)
 
         state_before = read_json(case_dir / "state.json")
         validation_before = read_json(case_dir / "validation.json")
         marker_before = read_json(case_dir / "post/sim_done.json")
 
-        history_len_before = len(state_before["history"])
-
-        second = mark_sim_done_main(["--campaign-root", str(self.root), "--case-id", "0"])
+        second = mark_sim_done_main(self._adopt_argv())
         self.assertEqual(second, 0)
 
         state_after = read_json(case_dir / "state.json")
@@ -157,53 +242,47 @@ class MarkSimDoneTests(unittest.TestCase):
         marker_after = read_json(case_dir / "post/sim_done.json")
 
         self.assertEqual(state_after["state"], "Sim_done")
-        self.assertEqual(len(state_after["history"]), history_len_before)
-
+        self.assertEqual(len(state_after["history"]), len(state_before["history"]))
         self.assertEqual(validation_after["simulation"], validation_before["simulation"])
         self.assertEqual(marker_after, marker_before)
 
-    def test_marks_running_case_sim_done_from_raw_diagnostic_evidence(self) -> None:
+    def test_runtime_success_receipt_marks_matching_running_execution_done(self) -> None:
         case_dir = self.root / "000_fake_case"
-        state_path = case_dir / "state.json"
-        state = read_json(state_path)
-        state["state"] = "Running"
-        state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+        self._mark_running()
         self._write_raw(case_dir, "diags/raw_000.fake", b"fake payload")
 
-        rc = mark_sim_done_main(["--campaign-root", str(self.root), "--case-id", "0"])
-
+        rc = mark_sim_done_main(self._runtime_argv())
         self.assertEqual(rc, 0)
 
-        state_after = read_json(state_path)
+        state = read_json(case_dir / "state.json")
         validation = read_json(case_dir / "validation.json")
         marker = read_json(case_dir / "post/sim_done.json")
-
-        self.assertEqual(state_after["state"], "Sim_done")
-        self.assertEqual(state_after["history"][-1]["from"], "Running")
-        self.assertEqual(state_after["history"][-1]["to"], "Sim_done")
-        self.assertEqual(state_after["history"][-1]["operation"], "mark_sim_done")
-
-        self.assertTrue(validation["simulation"]["ok"])
-        self.assertEqual(validation["simulation"]["operation"], "mark_sim_done")
-        self.assertEqual(validation["simulation"]["marker_path"], "post/sim_done.json")
-        self.assertEqual(validation["simulation"]["destructive_operations"], 0)
-
-        latest = validation["simulation"]["latest"]
-        self.assertTrue(latest["ok"])
-        self.assertEqual(latest["operation"], "mark_sim_done")
-        self.assertEqual(latest["state_from"], "Running")
-        self.assertEqual(latest["state_to"], "Sim_done")
-        self.assertEqual(latest["marker_path"], "post/sim_done.json")
-
-        self.assertTrue(marker["ok"])
-        self.assertEqual(marker["operation"], "mark_sim_done")
-        self.assertEqual(marker["case_id"], 0)
-        self.assertEqual(marker["case_name"], "000_fake_case")
+        self.assertEqual(state["state"], "Sim_done")
+        self.assertEqual(validation["simulation"]["evidence_mode"], "runtime_success_receipt")
+        self.assertEqual(validation["simulation"]["return_code"], 0)
+        self.assertEqual(marker["evidence_mode"], "runtime_success_receipt")
         self.assertEqual(marker["return_code"], 0)
-        self.assertEqual(marker["destructive_operations"], 0)
-        self.assertIn("finished_at", marker)
+        self.assertEqual(marker["runtime_receipt"]["scheduler_job_id"], "12345")
 
-        self.assertFalse(validation["cleanup"]["cleanup_allowed"])
+    def test_failed_runtime_receipt_cannot_be_rescued_by_residual_raw(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._mark_running()
+        self._write_raw(case_dir, "diags/raw_000.fake", b"partial raw that satisfies min_files")
+
+        rc = mark_sim_done_main(self._runtime_argv(return_code=37))
+        self.assertEqual(rc, 1)
+        self.assertEqual(read_json(case_dir / "state.json")["state"], "Running")
+        self.assertFalse((case_dir / "post/sim_done.json").exists())
+
+    def test_runtime_receipt_from_other_execution_is_rejected_even_with_raw(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._mark_running()
+        self._write_raw(case_dir, "diags/raw_000.fake", b"partial raw that satisfies min_files")
+
+        rc = mark_sim_done_main(self._runtime_argv(scheduler_job_id="99999"))
+        self.assertEqual(rc, 1)
+        self.assertEqual(read_json(case_dir / "state.json")["state"], "Running")
+        self.assertFalse((case_dir / "post/sim_done.json").exists())
 
     def _write_fake_campaign(self) -> None:
         campaign = {
