@@ -8,6 +8,12 @@ import sys
 from types import ModuleType
 from typing import Any, Sequence
 
+from campaign_workflow.clpu_n2_submission import (
+    ClpuN2SubmissionError,
+    require_launch_gate,
+    transactional_submit_finite_chain,
+)
+
 
 RETENTION_CONTRACT_ID = "clpu_n2_retain_raw_v1"
 RETENTION_POLICY_KEY = "raw_retention_required"
@@ -101,14 +107,38 @@ def _install_retention_contract(base: ModuleType) -> None:
     base.build_manifest = build_manifest
 
 
+def _install_launch_transaction(base: ModuleType, argv: Sequence[str]) -> None:
+    parser = base.build_parser()
+    raw = parser.parse_args(list(argv))
+    if not bool(raw.execute):
+        return
+
+    resolved = base.resolve_args(raw)
+    launch_gate_path, _, launch_gate_sha256 = require_launch_gate(
+        optimization_root=resolved.optimization_root,
+        start_iteration=resolved.start_iteration,
+    )
+
+    def submit_finite_chain(args: Any) -> dict[str, Any]:
+        return transactional_submit_finite_chain(
+            base=base,
+            args=args,
+            launch_gate_path=launch_gate_path,
+            launch_gate_sha256=launch_gate_sha256,
+        )
+
+    base.submit_finite_chain = submit_finite_chain
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     try:
         base = _load_base_chain()
         _require_retention_policy(base, args)
         _install_retention_contract(base)
+        _install_launch_transaction(base, args)
         return int(base.main(args))
-    except (RuntimeError, ValueError) as exc:
+    except (ClpuN2SubmissionError, RuntimeError, ValueError) as exc:
         print(f"[CLPU-N2-CHAIN] ERROR: {exc}", file=sys.stderr)
         return 2
 
