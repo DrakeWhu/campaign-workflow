@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import math
@@ -19,51 +20,104 @@ BASELINE_LASER_WAIST_CONVENTION = (
     "clpu_document_spot_values_are_picmi_w0_and_30fs_intensity_fwhm_v2"
 )
 BASELINE_LASER_SPOT_DEFINITION = "picmi_waist_w0_1e2_intensity"
+EXPECTED_CORRECTED_BASE_SHA256 = (
+    "9dc068c3e43a2df2c92414e9d161618e752a83e1e6c67ef7b1ef97ccebcfdd3a"
+)
 
 
-def _load_base_module() -> ModuleType:
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_verified_base(
+    path: Path,
+    *,
+    resolution_mode: str,
+    wrapper_path: Path,
+) -> tuple[ModuleType, dict[str, str]]:
+    resolved_path = path.expanduser().resolve(strict=False)
+    if resolved_path == wrapper_path:
+        raise ImportError(
+            "corrected capillary input template resolves to the wrapper itself: "
+            f"{resolved_path}"
+        )
+    if not resolved_path.is_file():
+        raise ImportError(
+            "corrected capillary input template is missing for "
+            f"{resolution_mode}: {resolved_path}"
+        )
+
+    actual_sha256 = _sha256_file(resolved_path)
+    if actual_sha256 != EXPECTED_CORRECTED_BASE_SHA256:
+        raise ImportError(
+            "corrected capillary input template SHA256 mismatch for "
+            f"{resolution_mode}: path={resolved_path} "
+            f"expected={EXPECTED_CORRECTED_BASE_SHA256} got={actual_sha256}"
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        "clpu_corrected_capillary_input_template",
+        resolved_path,
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(
+            "could not create import specification for corrected capillary "
+            f"input template: {resolved_path}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module, {
+        "resolution_mode": resolution_mode,
+        "path": str(resolved_path),
+        "sha256": actual_sha256,
+    }
+
+
+def _load_base_module() -> tuple[ModuleType, dict[str, str]]:
     this_file = Path(__file__).resolve()
-    candidates: list[Path] = []
 
     explicit = os.environ.get("CAP_CORRECTED_INPUT_TEMPLATE", "").strip()
     if explicit:
-        candidates.append(Path(explicit).expanduser())
+        return _load_verified_base(
+            Path(explicit),
+            resolution_mode="explicit_override",
+            wrapper_path=this_file,
+        )
 
-    candidates.append(this_file.with_name("input_template.py"))
+    sibling = this_file.with_name("input_template.py")
+    if sibling != this_file and sibling.exists():
+        return _load_verified_base(
+            sibling,
+            resolution_mode="sibling",
+            wrapper_path=this_file,
+        )
 
     workflow_root = os.environ.get("WFLOW_SRC", "").strip()
     if workflow_root:
-        candidates.append(
+        workflow_candidate = (
             Path(workflow_root).expanduser()
             / "examples"
             / "sunrise"
             / "corrected_capillary"
             / "input_template.py"
         )
-
-    checked: list[str] = []
-    for candidate in candidates:
-        path = candidate.resolve(strict=False)
-        checked.append(str(path))
-        if path == this_file or not path.is_file():
-            continue
-        spec = importlib.util.spec_from_file_location(
-            "clpu_corrected_capillary_input_template",
-            path,
+        return _load_verified_base(
+            workflow_candidate,
+            resolution_mode="workflow_root",
+            wrapper_path=this_file,
         )
-        if spec is None or spec.loader is None:
-            continue
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
 
     raise ImportError(
-        "could not locate corrected capillary input template; checked: "
-        + ", ".join(checked)
+        "could not locate corrected capillary input template: no explicit "
+        "CAP_CORRECTED_INPUT_TEMPLATE, verified sibling, or WFLOW_SRC candidate"
     )
 
 
-BASE = _load_base_module()
+BASE, BASE_INPUT_CLOSURE = _load_base_module()
 
 
 def _exact_target(
@@ -184,6 +238,7 @@ def resolve_parameters(
         f"{iteration}:{iteration}" for iteration in exact_iterations
     )
 
+    wrapper_path = Path(__file__).resolve()
     resolved.update(
         {
             "schema_version": 5,
@@ -191,6 +246,15 @@ def resolve_parameters(
                 "clpu_carlos_plateau_quasiparabolic_hydrogen_"
                 "baseline_soft50_dual_exit_picmi_w0_v2"
             ),
+            "input_closure": {
+                "schema_version": 1,
+                "wrapper_path": str(wrapper_path),
+                "wrapper_sha256": _sha256_file(wrapper_path),
+                "base_resolution_mode": BASE_INPUT_CLOSURE["resolution_mode"],
+                "base_path": BASE_INPUT_CLOSURE["path"],
+                "base_sha256": BASE_INPUT_CLOSURE["sha256"],
+                "expected_base_sha256": EXPECTED_CORRECTED_BASE_SHA256,
+            },
             "laser_spot_definition": BASELINE_LASER_SPOT_DEFINITION,
             "input_conventions_ack": BASELINE_LASER_WAIST_CONVENTION,
             "laser_spot_document_value_m": expected_waist_m,

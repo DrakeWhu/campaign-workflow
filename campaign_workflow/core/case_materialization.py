@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 from dataclasses import dataclass
@@ -7,9 +8,13 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from campaign_workflow.core.atomic_io import write_json_atomic
 from campaign_workflow.core.case_dirs import build_case_dir_plan, materialize_one_case_dir
 from campaign_workflow.core.path_safety import validate_relative_path
 from campaign_workflow.core.tsv_cases import CaseRecord
+
+
+MATERIALIZATION_MANIFEST_NAME = "input_materialization.json"
 
 
 @dataclass(frozen=True)
@@ -35,8 +40,18 @@ DEFAULT_ENV_COLUMN_RULES = (
     EnvColumnRule("LASER_CASE", "CAP_LASER_CASE", required=True),
     EnvColumnRule("PLASMA_KIND", "CAP_PLASMA_KIND", required=True),
     EnvColumnRule("N0_CM3", "CAP_N0_CM3", required=True),
-    EnvColumnRule("PLATEAU_LENGTH_MM", "CAP_PLATEAU_LENGTH_M", required=True, scale=Decimal("1e-3")),
-    EnvColumnRule("RADIUS_UM", "CAP_RADIUS_M", required=False, scale=Decimal("1e-6")),
+    EnvColumnRule(
+        "PLATEAU_LENGTH_MM",
+        "CAP_PLATEAU_LENGTH_M",
+        required=True,
+        scale=Decimal("1e-3"),
+    ),
+    EnvColumnRule(
+        "RADIUS_UM",
+        "CAP_RADIUS_M",
+        required=False,
+        scale=Decimal("1e-6"),
+    ),
     EnvColumnRule(
         "FOCUS_OFFSET_FROM_PLATEAU_START_MM",
         "CAP_FOCUS_OFFSET_FROM_PLATEAU_START_MM",
@@ -58,7 +73,12 @@ DEFAULT_ENV_COLUMN_RULES = (
         required=False,
         scale=Decimal("1e-15"),
     ),
-    EnvColumnRule("CAP_RMAX_UM", "CAP_RMAX_M", required=True, scale=Decimal("1e-6")),
+    EnvColumnRule(
+        "CAP_RMAX_UM",
+        "CAP_RMAX_M",
+        required=True,
+        scale=Decimal("1e-6"),
+    ),
     EnvColumnRule("CAP_NR", "CAP_NR", required=True),
 )
 
@@ -88,7 +108,9 @@ def _parse_scale(value: Any) -> Decimal | None:
 
 def _parse_env_column_rule(raw_rule: dict[str, Any]) -> EnvColumnRule:
     if not isinstance(raw_rule, dict):
-        raise ValueError(f"env_columns entries must be objects, got {type(raw_rule).__name__}")
+        raise ValueError(
+            f"env_columns entries must be objects, got {type(raw_rule).__name__}"
+        )
 
     column = str(raw_rule.get("column", "")).strip()
     env = _require_env_name(str(raw_rule.get("env", "")).strip())
@@ -145,7 +167,9 @@ def get_case_materialization_config(config: dict[str, Any]) -> CaseMaterializati
         label="case_materialization.input_template",
     )
     input_name = validate_relative_path(
-        materialization.get("input_name", simulation.get("input_script", "input.py")),
+        materialization.get(
+            "input_name", simulation.get("input_script", "input.py")
+        ),
         label="case_materialization.input_name",
     )
     env_name = validate_relative_path(
@@ -159,7 +183,9 @@ def get_case_materialization_config(config: dict[str, Any]) -> CaseMaterializati
     else:
         if not isinstance(raw_rules, list):
             raise ValueError("case_materialization.env_columns must be a list")
-        env_column_rules = tuple(_parse_env_column_rule(rule) for rule in raw_rules)
+        env_column_rules = tuple(
+            _parse_env_column_rule(rule) for rule in raw_rules
+        )
 
     env_constants = _parse_env_constants(materialization.get("env_constants"))
 
@@ -191,7 +217,10 @@ def _convert_value(raw_value: str, rule: EnvColumnRule) -> str:
         ) from exc
 
 
-def build_env_values(case: CaseRecord, mat_config: CaseMaterializationConfig) -> tuple[list[tuple[str, str]], list[str]]:
+def build_env_values(
+    case: CaseRecord,
+    mat_config: CaseMaterializationConfig,
+) -> tuple[list[tuple[str, str]], list[str]]:
     values: list[tuple[str, str]] = []
     errors: list[str] = []
     seen_env: set[str] = set()
@@ -199,13 +228,17 @@ def build_env_values(case: CaseRecord, mat_config: CaseMaterializationConfig) ->
     for rule in mat_config.env_column_rules:
         if rule.column not in case.row:
             if rule.required:
-                errors.append(f"missing required column {rule.column!r} for {rule.env}")
+                errors.append(
+                    f"missing required column {rule.column!r} for {rule.env}"
+                )
             continue
 
         raw_value = str(case.row.get(rule.column, "")).strip()
         if raw_value == "":
             if rule.required:
-                errors.append(f"empty required column {rule.column!r} for {rule.env}")
+                errors.append(
+                    f"empty required column {rule.column!r} for {rule.env}"
+                )
             continue
 
         try:
@@ -215,7 +248,9 @@ def build_env_values(case: CaseRecord, mat_config: CaseMaterializationConfig) ->
             continue
 
         if rule.env in seen_env:
-            errors.append(f"duplicate environment variable in materialization rules: {rule.env}")
+            errors.append(
+                f"duplicate environment variable in materialization rules: {rule.env}"
+            )
             continue
 
         seen_env.add(rule.env)
@@ -223,7 +258,9 @@ def build_env_values(case: CaseRecord, mat_config: CaseMaterializationConfig) ->
 
     for name, value in mat_config.env_constants:
         if name in seen_env:
-            errors.append(f"duplicate environment variable from constants: {name}")
+            errors.append(
+                f"duplicate environment variable from constants: {name}"
+            )
             continue
         seen_env.add(name)
         values.append((name, value))
@@ -240,7 +277,10 @@ def _shell_double_quote(value: str) -> str:
     return f'"{text}"'
 
 
-def render_case_env(case: CaseRecord, env_values: list[tuple[str, str]]) -> str:
+def render_case_env(
+    case: CaseRecord,
+    env_values: list[tuple[str, str]],
+) -> str:
     lines = [
         "# Generated by campaign_workflow.cli.materialize_cases",
         "# Source: cases.tsv + input_template.py",
@@ -294,6 +334,14 @@ def _copy_file_atomic(src: Path, dst: Path) -> None:
                 pass
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def build_case_materialization_plan(
     *,
     campaign_root: Path,
@@ -301,19 +349,39 @@ def build_case_materialization_plan(
     config: dict[str, Any],
     mat_config: CaseMaterializationConfig,
 ) -> list[dict[str, Any]]:
-    template_path = (campaign_root / mat_config.input_template).resolve(strict=False)
+    template_path = (
+        campaign_root / mat_config.input_template
+    ).resolve(strict=False)
     if not template_path.exists():
         raise FileNotFoundError(f"missing input template: {template_path}")
     if not template_path.is_file():
         raise ValueError(f"input template is not a regular file: {template_path}")
+    template_sha256 = _sha256_file(template_path)
 
-    case_dir_plans = build_case_dir_plan(campaign_root=campaign_root, cases=cases, config=config)
+    state = config.get("state", {})
+    if state is None:
+        state = {}
+    if not isinstance(state, dict):
+        raise ValueError("campaign.json state must be an object")
+    manifests_dir = validate_relative_path(
+        state.get("manifests_dir", "manifests"),
+        label="state.manifests_dir",
+    )
+
+    case_dir_plans = build_case_dir_plan(
+        campaign_root=campaign_root,
+        cases=cases,
+        config=config,
+    )
 
     plans: list[dict[str, Any]] = []
     for case, case_dir_plan in zip(cases, case_dir_plans):
         case_dir = Path(case_dir_plan["case_dir"])
         input_path = case_dir / mat_config.input_name
         env_path = case_dir / mat_config.env_name
+        manifest_path = (
+            case_dir / manifests_dir / MATERIALIZATION_MANIFEST_NAME
+        )
         env_values, env_errors = build_env_values(case, mat_config)
         plans.append(
             {
@@ -322,7 +390,9 @@ def build_case_materialization_plan(
                 "case_dir": case_dir,
                 "input_path": input_path,
                 "env_path": env_path,
+                "manifest_path": manifest_path,
                 "template_path": template_path,
+                "template_sha256": template_sha256,
                 "env_text": render_case_env(case, env_values),
                 "env_errors": env_errors,
             }
@@ -338,21 +408,26 @@ def materialize_one_case(
     overwrite: bool,
 ) -> dict[str, Any]:
     case: CaseRecord = plan["case"]
+    case_dir: Path = plan["case_dir"]
     input_path: Path = plan["input_path"]
     env_path: Path = plan["env_path"]
+    manifest_path: Path = plan["manifest_path"]
     template_path: Path = plan["template_path"]
+    template_sha256 = str(plan["template_sha256"])
 
     result: dict[str, Any] = {
         "case_id": case.case_id,
         "case_name": case.case_name,
-        "case_dir": str(plan["case_dir"]),
+        "case_dir": str(case_dir),
         "input_path": str(input_path),
         "env_path": str(env_path),
+        "manifest_path": str(manifest_path),
         "actions": [],
         "errors": [],
         "case_dir_actions": 0,
         "input_written": 0,
         "env_written": 0,
+        "manifest_written": 0,
     }
 
     result["errors"].extend(plan.get("env_errors", []))
@@ -360,38 +435,94 @@ def materialize_one_case(
     if result["errors"]:
         return result
 
-    dir_result = materialize_one_case_dir(plan=plan["case_dir_plan"], dry_run=dry_run)
+    dir_result = materialize_one_case_dir(
+        plan=plan["case_dir_plan"],
+        dry_run=dry_run,
+    )
     result["actions"].extend(dir_result["actions"])
     result["errors"].extend(dir_result["errors"])
     result["case_dir_actions"] = len(dir_result["actions"])
 
     input_action_planned = False
     env_action_planned = False
+    manifest_action_planned = False
 
     if input_path.exists() and not overwrite:
-        result["errors"].append(f"refusing to overwrite existing input file: {input_path}")
+        result["errors"].append(
+            f"refusing to overwrite existing input file: {input_path}"
+        )
     else:
-        action = "overwrite input file" if input_path.exists() else "copy input template"
-        result["actions"].append(f"{action}: {template_path} -> {input_path}")
+        action = (
+            "overwrite input file" if input_path.exists() else "copy input template"
+        )
+        result["actions"].append(
+            f"{action}: {template_path} -> {input_path}"
+        )
         input_action_planned = True
 
     if env_path.exists() and not overwrite:
-        result["errors"].append(f"refusing to overwrite existing env file: {env_path}")
+        result["errors"].append(
+            f"refusing to overwrite existing env file: {env_path}"
+        )
     else:
         action = "overwrite env file" if env_path.exists() else "write env file"
         result["actions"].append(f"{action}: {env_path}")
         env_action_planned = True
+
+    if manifest_path.exists() and not overwrite:
+        result["errors"].append(
+            "refusing to overwrite existing input materialization manifest: "
+            f"{manifest_path}"
+        )
+    else:
+        action = (
+            "overwrite input materialization manifest"
+            if manifest_path.exists()
+            else "write input materialization manifest"
+        )
+        result["actions"].append(f"{action}: {manifest_path}")
+        manifest_action_planned = True
 
     if result["errors"]:
         return result
 
     result["input_written"] = 1 if input_action_planned else 0
     result["env_written"] = 1 if env_action_planned else 0
+    result["manifest_written"] = 1 if manifest_action_planned else 0
 
     if dry_run:
         return result
 
     _copy_file_atomic(template_path, input_path)
     _write_text_atomic(env_path, plan["env_text"])
+
+    materialized_input_sha256 = _sha256_file(input_path)
+    if materialized_input_sha256 != template_sha256:
+        raise RuntimeError(
+            "materialized input SHA256 does not match source template: "
+            f"source={template_sha256} materialized={materialized_input_sha256}"
+        )
+    env_sha256 = _sha256_file(env_path)
+
+    manifest_doc = {
+        "schema_version": 1,
+        "operation": "materialize_cases",
+        "case_id": case.case_id,
+        "case_name": case.case_name,
+        "source_input_template": {
+            "path": str(template_path),
+            "sha256": template_sha256,
+        },
+        "materialized_input": {
+            "path": input_path.relative_to(case_dir).as_posix(),
+            "sha256": materialized_input_sha256,
+        },
+        "case_env": {
+            "path": env_path.relative_to(case_dir).as_posix(),
+            "sha256": env_sha256,
+        },
+        "destructive_operations": 0,
+    }
+    write_json_atomic(manifest_path, manifest_doc)
 
     return result
