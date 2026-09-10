@@ -113,7 +113,15 @@ class CaseCycleRuntimeIntegrationTests(unittest.TestCase):
         runner.chmod(0o755)
         return root, runner
 
-    def _run_cycle(self, site: str, script: Path, *, runner_rc: int) -> tuple[subprocess.CompletedProcess[str], Path]:
+    def _run_cycle(
+        self,
+        site: str,
+        script: Path,
+        *,
+        runner_rc: int,
+        confirm_cleanup_execute: str = "0",
+        raw_retention_required: str | None = None,
+    ) -> tuple[subprocess.CompletedProcess[str], Path]:
         root, runner = self._make_campaign(site, runner_rc=runner_rc)
         workflow_env = self.tmp / f"workflow_env_{site}_{runner_rc}.sh"
         workflow_env.write_text(
@@ -135,9 +143,11 @@ class CaseCycleRuntimeIntegrationTests(unittest.TestCase):
                 "SLURM_JOB_PARTITION": "novas" if site == "lynx" else "T6H",
                 "EXPECTED_SLURM_PARTITION": "novas",
                 "WARPX_LYNX_MODULE": "fake-warpx-module",
-                "CONFIRM_CLEANUP_EXECUTE": "0",
+                "CONFIRM_CLEANUP_EXECUTE": confirm_cleanup_execute,
             }
         )
+        if raw_retention_required is not None:
+            env["CW_RAW_RETENTION_REQUIRED"] = raw_retention_required
         result = subprocess.run(
             ["bash", str(script.resolve())],
             cwd=root,
@@ -182,6 +192,26 @@ class CaseCycleRuntimeIntegrationTests(unittest.TestCase):
                 self.assertTrue((case_dir / "manifests/raw_delete_manifest.json").is_file())
                 self.assertFalse((case_dir / "post/raw_deleted.json").exists())
                 self.assertEqual(read_json(case_dir / "state.json")["state"], "Raw_delete_eligible")
+
+    def test_sunrise_raw_retention_overrides_inherited_cleanup_execute_one(self) -> None:
+        result, root = self._run_cycle(
+            "sunrise",
+            Path("examples/sunrise/submit_case_cycle_array.sh"),
+            runner_rc=0,
+            confirm_cleanup_execute="1",
+            raw_retention_required="1",
+        )
+        case_dir = root / "000_fake_case"
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((case_dir / "diags/raw_000.fake").is_file())
+        self.assertTrue((case_dir / "post/analysis_done.json").is_file())
+        self.assertTrue((case_dir / "post/raw_delete_eligible.json").is_file())
+        self.assertTrue((case_dir / "manifests/raw_delete_manifest.json").is_file())
+        self.assertFalse((case_dir / "post/raw_deleted.json").exists())
+        self.assertEqual(read_json(case_dir / "state.json")["state"], "Raw_delete_eligible")
+        self.assertIn("RETAIN RAW", result.stdout + result.stderr)
+        self.assertIn("CONFIRM_CLEANUP_EXECUTE is ignored", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

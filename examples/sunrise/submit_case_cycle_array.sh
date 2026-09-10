@@ -24,6 +24,15 @@ CAMPAIGN_ROOT="${CAMPAIGN_ROOT:-${SLURM_SUBMIT_DIR}}"
 WORKFLOW_ROOT="${WORKFLOW_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
 WORKFLOW_ENV="${WORKFLOW_ENV:-${HOME}/apps/env/campaign-workflow.sh}"
 CASE_RUNNER="${CASE_RUNNER:-${WORKFLOW_ROOT}/examples/sunrise/run_warpx_case_sunrise.sh}"
+RAW_RETENTION_REQUIRED="${CW_RAW_RETENTION_REQUIRED:-0}"
+case "${RAW_RETENTION_REQUIRED}" in
+    0|1) ;;
+    *)
+        echo "[CASE-CYCLE] ERROR: CW_RAW_RETENTION_REQUIRED must be 0 or 1; got ${RAW_RETENTION_REQUIRED@Q}." >&2
+        exit 2
+        ;;
+esac
+readonly RAW_RETENTION_REQUIRED
 
 CAMPAIGN_ROOT="$(cd "${CAMPAIGN_ROOT}" && pwd -P)"
 WORKFLOW_ROOT="$(cd "${WORKFLOW_ROOT}" && pwd -P)"
@@ -224,7 +233,9 @@ run_phase cleanup_raw_case_dry_run \
         --dry-run \
         --verbose
 
-if [[ "${CONFIRM_CLEANUP_EXECUTE:-0}" == "1" ]]; then
+if [[ "${RAW_RETENTION_REQUIRED}" == "1" ]]; then
+    echo "[CASE-CYCLE] RETAIN RAW: destructive cleanup disabled by CW_RAW_RETENTION_REQUIRED=1; CONFIRM_CLEANUP_EXECUTE is ignored."
+elif [[ "${CONFIRM_CLEANUP_EXECUTE:-0}" == "1" ]]; then
     run_phase cleanup_raw_case_execute \
         python -m campaign_workflow.cli.cleanup_raw_case \
             --campaign-root "${CAMPAIGN_ROOT}" \
