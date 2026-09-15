@@ -103,6 +103,12 @@ def _install_validated_cleanup_contract(base: ModuleType) -> None:
             "required": True,
             "cleanup_execute": True,
         }
+        chain: list[str] = []
+        if args.initial_dependency_job_id is not None:
+            chain.append(f"J_{args.initial_dependency_job_id}")
+        for iteration in range(args.start_iteration, args.final_iteration + 1):
+            chain.extend([f"G_{iteration}", f"A_{iteration}", f"T_{iteration}"])
+        manifest["chain_text"] = " -> ".join(chain)
         return manifest
 
     def build_symbolic_chain(args: Any) -> list[dict[str, Any]]:
