@@ -52,7 +52,7 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
                 {
                     "schema_version": 1,
                     "optimization_name": "clpu_n2_test",
-                    "policy": {"raw_retention_required": True},
+                    "policy": {"cleanup_after_validation_required": True},
                 }
             )
             + "\n",
@@ -92,9 +92,10 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
             "gate_a_status": "pass",
             "gate_b_status": "pass",
             "f01_f03_status": "pass",
-            "raw_retention_status": "pass",
-            "raw_retention_capacity_status": "pass",
-            "cleanup_execute": False,
+            "raw_retention_status": "not_required",
+            "raw_retention_capacity_status": "not_required",
+            "cleanup_after_validation_status": "pass",
+            "cleanup_execute": True,
             "iteration": 0,
             "optimization_root": str(self.root.resolve()),
         }
@@ -102,8 +103,8 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         return path
 
-    def _install_retention(self) -> None:
-        self.launcher._install_retention_contract(self.base)
+    def _install_cleanup(self) -> None:
+        self.launcher._install_validated_cleanup_contract(self.base)
 
     def test_failed_launch_gate_blocks_sbatch_before_any_publication(self) -> None:
         self._write_gate(gate_b_status="fail")
@@ -120,7 +121,7 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
     def test_partial_acceptance_is_journaled_and_retry_resumes_without_duplicate(self) -> None:
         gate = self._write_gate()
         args = self._resolved_args()
-        self._install_retention()
+        self._install_cleanup()
         gate_sha = sha256_file(gate)
 
         with patch.object(
@@ -177,7 +178,7 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
     def test_every_accepted_job_has_durable_receipt(self) -> None:
         gate = self._write_gate()
         args = self._resolved_args()
-        self._install_retention()
+        self._install_cleanup()
         gate_sha = sha256_file(gate)
         with patch.object(
             self.base,
@@ -203,7 +204,7 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
     def test_retry_after_complete_chain_refuses_all_new_sbatch_calls(self) -> None:
         gate = self._write_gate()
         args = self._resolved_args()
-        self._install_retention()
+        self._install_cleanup()
         gate_sha = sha256_file(gate)
         with patch.object(
             self.base,
@@ -230,7 +231,7 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
     def test_existing_submitted_iteration_without_matching_journal_blocks_launch(self) -> None:
         gate = self._write_gate()
         args = self._resolved_args()
-        self._install_retention()
+        self._install_cleanup()
         (self.root / "optimization_state.json").write_text(
             json.dumps(
                 {
@@ -267,7 +268,7 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
     def test_changed_gate_after_partial_acceptance_cannot_start_second_overlapping_chain(self) -> None:
         gate = self._write_gate()
         args = self._resolved_args()
-        self._install_retention()
+        self._install_cleanup()
         first_sha = sha256_file(gate)
         with patch.object(
             self.base,
