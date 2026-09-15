@@ -52,8 +52,6 @@ def _require_cleanup_policy(base: ModuleType, argv: Sequence[str]) -> Path:
             "CLPU N2 launch requires explicit policy.cleanup_after_validation_required=true; "
             f"got {value!r} in {path}"
         )
-    gate_script = optimization_root / "workflow_placeholder"
-    # The resolved workflow check belongs below because argv can override it.
     return optimization_root
 
 
@@ -139,6 +137,9 @@ def _install_launch_transaction(base: ModuleType, argv: Sequence[str]) -> None:
         return
 
     resolved = base.resolve_args(raw)
+    gate_script = resolved.workflow_root / "examples" / "sunrise" / "corrected_capillary" / "run_nitrogen_gate_b_control_sunrise.sh"
+    if not gate_script.is_file():
+        raise RuntimeError(f"missing per-iteration Gate B control script: {gate_script}")
     launch_gate_path, _, launch_gate_sha256 = require_launch_gate(
         optimization_root=resolved.optimization_root,
         start_iteration=resolved.start_iteration,
