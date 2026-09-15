@@ -136,8 +136,8 @@ def build_gate_sbatch_command(*, base: Any, args: Any, iteration: int, dependenc
     command = [
         "sbatch", "--parsable", "--partition=T1H", "--time=01:00:00",
         "--nodes=1", "--ntasks=1", f"--job-name={job_name}",
-        f"--output={loop_logs / (job_name + "_%j.out")}",
-        f"--error={loop_logs / (job_name + "_%j.err")}",
+        f"--output={loop_logs / (job_name + '_%j.out')}",
+        f"--error={loop_logs / (job_name + '_%j.err')}",
     ]
     if dependency:
         command.append(f"--dependency={dependency}")
