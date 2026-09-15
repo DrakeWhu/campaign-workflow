@@ -10,6 +10,7 @@ from typing import Any, Sequence
 
 from campaign_workflow.clpu_n2_submission import (
     ClpuN2SubmissionError,
+    build_gate_sbatch_command,
     require_launch_gate,
     transactional_submit_finite_chain,
 )
@@ -114,13 +115,18 @@ def _install_validated_cleanup_contract(base: ModuleType) -> None:
             jobs.extend([
                 {"kind": "gate", "symbol": gate, "iteration": iteration,
                  "dependency": None if prior is None else f"afterok:{prior}", "job_id": None,
-                 "submit_command": None},
+                 "submit_command": build_gate_sbatch_command(
+                     base=base, args=args, iteration=iteration,
+                     dependency=None if prior is None else f"afterok:{prior}")},
                 {"kind": "array", "symbol": array, "iteration": iteration,
                  "dependency": f"afterok:{gate}", "job_id": None,
-                 "submit_command": None},
+                 "submit_command": build_array_sbatch_command(
+                     args=args, iteration=iteration, dependency=f"afterok:{gate}")},
                 {"kind": "tick", "symbol": tick, "iteration": iteration,
                  "next_iteration": iteration + 1, "dependency": f"afterok:{array}",
-                 "job_id": None, "submit_command": None},
+                 "job_id": None, "submit_command": base.build_tick_sbatch_command(
+                     args=args, iteration=iteration, next_iteration=iteration + 1,
+                     dependency=f"afterok:{array}")},
             ])
             prior = tick
         return jobs
