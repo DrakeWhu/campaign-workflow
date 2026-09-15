@@ -9,6 +9,7 @@ import sys
 from campaign_workflow.clpu_n2_gate_b import (
     GateBError,
     build_gate_b_receipt,
+    build_iteration_gate_b_receipt,
     verify_runtime_assets,
 )
 
@@ -26,6 +27,15 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--guiding-analysis-root", type=Path, required=True)
     validate.add_argument("--optimizer-root", type=Path, required=True)
     validate.add_argument("--output", type=Path, required=True)
+
+    iteration = sub.add_parser("validate-iteration")
+    iteration.add_argument("--optimization-root", type=Path, required=True)
+    iteration.add_argument("--campaign-root", type=Path, required=True)
+    iteration.add_argument("--workflow-root", type=Path, required=True)
+    iteration.add_argument("--guiding-analysis-root", type=Path, required=True)
+    iteration.add_argument("--optimizer-root", type=Path, required=True)
+    iteration.add_argument("--iteration", type=int, required=True)
+    iteration.add_argument("--output", type=Path, required=True)
 
     runtime = sub.add_parser("verify-runtime")
     runtime.add_argument("--receipt", type=Path, required=True)
@@ -48,6 +58,16 @@ def main(argv: list[str] | None = None) -> int:
                 guiding_analysis_root=args.guiding_analysis_root,
                 optimizer_root=args.optimizer_root,
                 output_path=args.output,
+            )
+        elif args.command == "validate-iteration":
+            result = build_iteration_gate_b_receipt(
+                optimization_root=args.optimization_root,
+                campaign_root=args.campaign_root,
+                workflow_root=args.workflow_root,
+                guiding_analysis_root=args.guiding_analysis_root,
+                optimizer_root=args.optimizer_root,
+                output_path=args.output,
+                iteration=args.iteration,
             )
         else:
             result = verify_runtime_assets(
