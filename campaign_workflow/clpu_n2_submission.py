@@ -60,9 +60,10 @@ def require_launch_gate(
         "gate_a_status": "pass",
         "gate_b_status": "pass",
         "f01_f03_status": "pass",
-        "raw_retention_status": "pass",
-        "raw_retention_capacity_status": "pass",
-        "cleanup_execute": False,
+        "raw_retention_status": "not_required",
+        "raw_retention_capacity_status": "not_required",
+        "cleanup_after_validation_status": "pass",
+        "cleanup_execute": True,
         "iteration": int(start_iteration),
     }
     for key, value in expected.items():
