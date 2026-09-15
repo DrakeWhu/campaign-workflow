@@ -104,6 +104,7 @@ def launch_identity(*, args: Any, launch_gate_sha256: str) -> dict[str, Any]:
         "tick_ntasks": int(args.tick_ntasks),
         "array_script": str(args.array_script),
         "tick_script": str(args.tick_script),
+        "gate_script": str(args.workflow_root / "examples" / "sunrise" / "corrected_capillary" / "run_nitrogen_gate_b_control_sunrise.sh"),
         "case_runner": None if args.case_runner is None else str(args.case_runner),
         "initial_dependency_job_id": args.initial_dependency_job_id,
         "optimization_config": (
@@ -124,9 +125,48 @@ def submission_manifest_path(*, optimization_root: Path, fingerprint: str) -> Pa
     return optimization_root / "loop_logs" / f"morbo_chain_n2_{fingerprint[:20]}.json"
 
 
+def gate_receipt_path(*, args: Any, iteration: int) -> Path:
+    return args.optimization_root / "provenance" / f"clpu_n2_gate_b_iter_{iteration:03d}.json"
+
+
+def build_gate_sbatch_command(*, base: Any, args: Any, iteration: int, dependency: str | None) -> list[str]:
+    job_name = f"{args.job_name_prefix}_G{iteration:03d}"
+    loop_logs = args.optimization_root / "loop_logs"
+    script = args.workflow_root / "examples" / "sunrise" / "corrected_capillary" / "run_nitrogen_gate_b_control_sunrise.sh"
+    command = [
+        "sbatch", "--parsable", "--partition=T1H", "--time=01:00:00",
+        "--nodes=1", "--ntasks=1", f"--job-name={job_name}",
+        f"--output={loop_logs / (job_name + "_%j.out")}",
+        f"--error={loop_logs / (job_name + "_%j.err")}",
+    ]
+    if dependency:
+        command.append(f"--dependency={dependency}")
+    command.extend([
+        base.export_arg({
+            "CW_OPTIMIZATION_ROOT": args.optimization_root,
+            "CW_GATE_ITERATION": iteration,
+            "CW_WORKFLOW_ROOT": args.workflow_root,
+            "CW_WORKFLOW_ENV": args.workflow_env,
+        }),
+        str(script),
+    ])
+    return command
+
+
 def _planned_jobs(args: Any) -> list[dict[str, Any]]:
     jobs: list[dict[str, Any]] = []
     for iteration in range(args.start_iteration, args.final_iteration + 1):
+        jobs.append(
+            {
+                "kind": "gate",
+                "iteration": int(iteration),
+                "job_id": None,
+                "dependency": None,
+                "submit_command": None,
+                "receipt_path": None,
+                "accepted_at": None,
+            }
+        )
         jobs.append(
             {
                 "kind": "array",
@@ -381,7 +421,7 @@ def transactional_submit_finite_chain(
         manifest["last_error"] = None
         write_json_atomic(manifest_path, manifest)
 
-    previous_tick_job_id: str | None = args.initial_dependency_job_id
+    previous_gate_or_tick_job_id: str | None = args.initial_dependency_job_id
     last_array_job_id: str | None = None
 
     for index, job in enumerate(jobs):
@@ -393,15 +433,22 @@ def transactional_submit_finite_chain(
             if kind == "array":
                 last_array_job_id = existing_job_id
             else:
-                previous_tick_job_id = existing_job_id
+                previous_gate_or_tick_job_id = existing_job_id
                 last_array_job_id = None
             continue
 
-        if kind == "array":
+        if kind == "gate":
             dependency = (
-                None
-                if previous_tick_job_id is None
-                else f"afterok:{previous_tick_job_id}"
+                None if previous_gate_or_tick_job_id is None
+                else f"afterok:{previous_gate_or_tick_job_id}"
+            )
+            command = build_gate_sbatch_command(
+                base=base, args=args, iteration=iteration, dependency=dependency
+            )
+        elif kind == "array":
+            dependency = (
+                None if previous_gate_or_tick_job_id is None
+                else f"afterok:{previous_gate_or_tick_job_id}"
             )
             command = base.build_array_sbatch_command(
                 args=args,
@@ -487,7 +534,7 @@ def transactional_submit_finite_chain(
                 array_job=job,
             )
         else:
-            previous_tick_job_id = str(job_id)
+            previous_gate_or_tick_job_id = str(job_id)
             last_array_job_id = None
 
     manifest["submission_status"] = "complete"
