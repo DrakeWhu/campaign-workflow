@@ -497,6 +497,89 @@ def build_gate_b_receipt(
     return payload
 
 
+
+def build_iteration_gate_b_receipt(
+    *,
+    optimization_root: Path,
+    campaign_root: Path,
+    workflow_root: Path,
+    guiding_analysis_root: Path,
+    optimizer_root: Path,
+    output_path: Path,
+    iteration: int,
+) -> dict[str, Any]:
+    """Validate one optimizer-materialized N2 iteration before its array can run."""
+    optimization_root = optimization_root.expanduser().resolve(strict=True)
+    campaign_root = campaign_root.expanduser().resolve(strict=True)
+    workflow_root = workflow_root.expanduser().resolve(strict=True)
+    guiding_analysis_root = guiding_analysis_root.expanduser().resolve(strict=True)
+    optimizer_root = optimizer_root.expanduser().resolve(strict=True)
+
+    rows = _read_tsv(campaign_root / "cases.tsv")
+    if len(rows) != 8 or [int(row["CASE_ID"]) for row in rows] != list(range(8)):
+        raise GateBError("iteration Gate B requires exactly CASE_ID 0..7")
+    if any(
+        not math.isclose(float(row["LASER_DURATION_FWHM_FS"]), 30.0, rel_tol=0.0, abs_tol=1e-12)
+        for row in rows
+    ):
+        raise GateBError("iteration Gate B requires 30 fs intensity FWHM")
+
+    workflow_repo = git_snapshot(workflow_root)
+    guiding_repo = git_snapshot(guiding_analysis_root, expected_head=EXPECTED_GUIDING_COMMIT)
+    optimizer_repo = git_snapshot(optimizer_root, expected_head=EXPECTED_OPTIMIZER_COMMIT)
+    assets = {
+        rel: _asset(workflow_root / rel)
+        for rel in [
+            "campaign_workflow/clpu_n2_gate_b.py",
+            "examples/sunrise/corrected_capillary/input_template.py",
+            "examples/sunrise/corrected_capillary/run_nitrogen_warpx_case_sunrise.sh",
+            "examples/sunrise/corrected_capillary/run_nitrogen_case_analysis_sunrise.sh",
+            "examples/sunrise/corrected_capillary/validate_nitrogen_particle_outputs.py",
+            "examples/sunrise/corrected_capillary/validate_nitrogen_gate_b.py",
+            "examples/sunrise/corrected_capillary/run_nitrogen_gate_b_control_sunrise.sh",
+        ]
+    }
+    assets.update(
+        {
+            "materialized/campaign.json": _asset(campaign_root / "campaign.json"),
+            "materialized/input_template.py": _asset(campaign_root / "input_template.py"),
+            "materialized/cases.tsv": _asset(campaign_root / "cases.tsv"),
+        }
+    )
+    cases = [
+        validate_materialized_case(
+            row=row, campaign_root=campaign_root, workflow_root=workflow_root
+        )
+        for row in rows
+    ]
+    if list(campaign_root.rglob("*.h5")) or list(campaign_root.rglob("*.hdf5")):
+        raise GateBError("iteration Gate B campaign root contains HDF5 diagnostics")
+    if list(campaign_root.rglob("post/sim_submitted.json")):
+        raise GateBError("iteration Gate B campaign root contains sim_submitted receipts")
+
+    return {
+        "schema_version": 1,
+        "contract_id": GATE_B_CONTRACT_ID,
+        "status": "pass",
+        "optimization_root": str(optimization_root),
+        "campaign_root": str(campaign_root),
+        "iteration": int(iteration),
+        "candidate_count": len(rows),
+        "case_ids": [int(row["CASE_ID"]) for row in rows],
+        "all_cases_created": True,
+        "hdf5_file_count": 0,
+        "submitted_case_count": 0,
+        "repos": {
+            "campaign_workflow": workflow_repo,
+            "guiding_analysis_module": guiding_repo,
+            "campaign_optimizer": optimizer_repo,
+        },
+        "runtime": _runtime_info(),
+        "assets": assets,
+        "cases": cases,
+    }
+
+
 def verify_runtime_assets(
     *,
     receipt_path: Path,
