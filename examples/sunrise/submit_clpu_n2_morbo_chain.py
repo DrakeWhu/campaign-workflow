@@ -15,8 +15,8 @@ from campaign_workflow.clpu_n2_submission import (
 )
 
 
-RETENTION_CONTRACT_ID = "clpu_n2_retain_raw_v1"
-RETENTION_POLICY_KEY = "raw_retention_required"
+CLEANUP_CONTRACT_ID = "clpu_n2_cleanup_after_validation_v1"
+CLEANUP_POLICY_KEY = "cleanup_after_validation_required"
 
 
 def _load_base_chain() -> ModuleType:
@@ -30,7 +30,7 @@ def _load_base_chain() -> ModuleType:
     return module
 
 
-def _require_retention_policy(base: ModuleType, argv: Sequence[str]) -> Path:
+def _require_cleanup_policy(base: ModuleType, argv: Sequence[str]) -> Path:
     parser = base.build_parser()
     raw = parser.parse_args(list(argv))
     optimization_root = raw.optimization_root.expanduser().resolve(strict=False)
@@ -46,16 +46,16 @@ def _require_retention_policy(base: ModuleType, argv: Sequence[str]) -> Path:
     policy = payload.get("policy", {}) or {}
     if not isinstance(policy, dict):
         raise RuntimeError("optimization.json policy must be an object")
-    value = policy.get(RETENTION_POLICY_KEY)
+    value = policy.get(CLEANUP_POLICY_KEY)
     if value is not True:
         raise RuntimeError(
-            "CLPU N2 launch requires explicit policy.raw_retention_required=true; "
+            "CLPU N2 launch requires explicit policy.cleanup_after_validation_required=true; "
             f"got {value!r} in {path}"
         )
     return optimization_root
 
 
-def _force_retained_raw_export(command: Sequence[str]) -> list[str]:
+def _force_validated_cleanup_export(command: Sequence[str]) -> list[str]:
     out = list(command)
     found = False
     for index, item in enumerate(out):
@@ -71,8 +71,8 @@ def _force_retained_raw_export(command: Sequence[str]) -> list[str]:
         ]
         values.extend(
             [
-                "CW_RAW_RETENTION_REQUIRED=1",
-                "CONFIRM_CLEANUP_EXECUTE=0",
+                "CW_RAW_RETENTION_REQUIRED=0",
+                "CONFIRM_CLEANUP_EXECUTE=1",
             ]
         )
         out[index] = "--export=" + ",".join(values)
@@ -82,7 +82,7 @@ def _force_retained_raw_export(command: Sequence[str]) -> list[str]:
     return out
 
 
-def _install_retention_contract(base: ModuleType) -> None:
+def _install_validated_cleanup_contract(base: ModuleType) -> None:
     original_build_array = base.build_array_sbatch_command
     original_build_manifest = base.build_manifest
 
@@ -92,14 +92,14 @@ def _install_retention_contract(base: ModuleType) -> None:
             iteration=iteration,
             dependency=dependency,
         )
-        return _force_retained_raw_export(command)
+        return _force_validated_cleanup_export(command)
 
     def build_manifest(*, args: Any, jobs: list[dict[str, Any]], dry_run: bool) -> dict[str, Any]:
         manifest = original_build_manifest(args=args, jobs=jobs, dry_run=dry_run)
-        manifest["raw_retention_policy"] = {
-            "contract_id": RETENTION_CONTRACT_ID,
+        manifest["validated_cleanup_policy"] = {
+            "contract_id": CLEANUP_CONTRACT_ID,
             "required": True,
-            "cleanup_execute": False,
+            "cleanup_execute": True,
         }
         return manifest
 
@@ -134,8 +134,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     try:
         base = _load_base_chain()
-        _require_retention_policy(base, args)
-        _install_retention_contract(base)
+        _require_cleanup_policy(base, args)
+        _install_validated_cleanup_contract(base)
         _install_launch_transaction(base, args)
         return int(base.main(args))
     except (ClpuN2SubmissionError, RuntimeError, ValueError) as exc:
