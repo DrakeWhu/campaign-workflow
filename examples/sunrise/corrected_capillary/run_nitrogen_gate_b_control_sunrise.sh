@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=clpu_n2_gate_b
-#SBATCH --partition=T1H
+#SBATCH --partition=T6H
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --time=01:00:00
+#SBATCH --time=06:00:00
 set -Eeuo pipefail
 trap 'echo "[CLPU-N2-GATE-B-CONTROL] ERROR at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
 : "${CW_OPTIMIZATION_ROOT:?missing CW_OPTIMIZATION_ROOT}"
