@@ -31,7 +31,7 @@ def _load_launcher():
     return module
 
 
-class ClpuNitrogenRawRetentionTests(unittest.TestCase):
+class ClpuNitrogenValidatedCleanupTests(unittest.TestCase):
     def setUp(self) -> None:
         self.module = _load_launcher()
         self.workflow_root = Path.cwd().resolve()
@@ -47,7 +47,7 @@ class ClpuNitrogenRawRetentionTests(unittest.TestCase):
         payload = {
             "schema_version": 1,
             "optimization_name": "clpu_n2_test",
-            "policy": {"raw_retention_required": value},
+            "policy": {"cleanup_after_validation_required": value},
         }
         (self.root / "optimization.json").write_text(
             json.dumps(payload) + "\n",
@@ -72,7 +72,7 @@ class ClpuNitrogenRawRetentionTests(unittest.TestCase):
             "clpu_n2",
         ]
 
-    def test_dry_run_launch_command_forces_cleanup_off_even_if_environment_requests_one(self) -> None:
+    def test_dry_run_launch_command_forces_validated_cleanup(self) -> None:
         self._write_policy(True)
         stdout = io.StringIO()
         with patch.dict(
@@ -90,11 +90,11 @@ class ClpuNitrogenRawRetentionTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertTrue(payload["dry_run"])
         self.assertEqual(
-            payload["raw_retention_policy"],
+            payload["validated_cleanup_policy"],
             {
-                "contract_id": "clpu_n2_retain_raw_v1",
+                "contract_id": "clpu_n2_cleanup_after_validation_v1",
                 "required": True,
-                "cleanup_execute": False,
+                "cleanup_execute": True,
             },
         )
 
@@ -102,11 +102,11 @@ class ClpuNitrogenRawRetentionTests(unittest.TestCase):
         self.assertEqual(len(array_jobs), 2)
         for job in array_jobs:
             command = " ".join(job["submit_command"])
-            self.assertIn("CW_RAW_RETENTION_REQUIRED=1", command)
-            self.assertIn("CONFIRM_CLEANUP_EXECUTE=0", command)
-            self.assertNotIn("CONFIRM_CLEANUP_EXECUTE=1", command)
+            self.assertIn("CW_RAW_RETENTION_REQUIRED=0", command)
+            self.assertIn("CONFIRM_CLEANUP_EXECUTE=1", command)
+            self.assertNotIn("CONFIRM_CLEANUP_EXECUTE=0", command)
 
-    def test_missing_or_false_retention_policy_is_rejected_before_chain_planning(self) -> None:
+    def test_missing_or_false_cleanup_policy_is_rejected_before_chain_planning(self) -> None:
         stderr = io.StringIO()
         for value in (False, None):
             with self.subTest(value=value):
@@ -123,17 +123,17 @@ class ClpuNitrogenRawRetentionTests(unittest.TestCase):
                     rc = self.module.main(self._argv())
                 self.assertEqual(rc, 2)
                 self.assertIn(
-                    "policy.raw_retention_required=true",
+                    "policy.cleanup_after_validation_required=true",
                     stderr.getvalue(),
                 )
 
-    def test_retention_launcher_does_not_call_sbatch_without_execute(self) -> None:
+    def test_cleanup_launcher_does_not_call_sbatch_without_execute(self) -> None:
         self._write_policy(True)
         stdout = io.StringIO()
         base = self.module._load_base_chain()
         with patch.object(base.subprocess, "run") as run_mock:
-            self.module._require_retention_policy(base, self._argv())
-            self.module._install_retention_contract(base)
+            self.module._require_cleanup_policy(base, self._argv())
+            self.module._install_validated_cleanup_contract(base)
             with contextlib.redirect_stdout(stdout):
                 rc = base.main(self._argv())
         self.assertEqual(rc, 0)
