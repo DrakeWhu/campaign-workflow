@@ -557,7 +557,7 @@ def build_iteration_gate_b_receipt(
     if list(campaign_root.rglob("post/sim_submitted.json")):
         raise GateBError("iteration Gate B campaign root contains sim_submitted receipts")
 
-    return {
+    payload = {
         "schema_version": 1,
         "contract_id": GATE_B_CONTRACT_ID,
         "status": "pass",
@@ -578,6 +578,11 @@ def build_iteration_gate_b_receipt(
         "assets": assets,
         "cases": cases,
     }
+    output_path = output_path.expanduser().resolve(strict=False)
+    if output_path.exists():
+        raise GateBError(f"refusing to overwrite Gate B receipt: {output_path}")
+    _write_json_atomic(output_path, payload)
+    return payload
 
 
 def verify_runtime_assets(
