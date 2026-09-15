@@ -154,7 +154,7 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
         with patch.object(
             self.base,
             "execute_sbatch",
-            side_effect=["101", "102", "103"],
+            side_effect=["101", "102", "103", "104", "105"],
         ) as retry_mock:
             completed = transactional_submit_finite_chain(
                 base=self.base,
@@ -163,16 +163,18 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
                 launch_gate_sha256=gate_sha,
             )
 
-        self.assertEqual(retry_mock.call_count, 3)
+        self.assertEqual(retry_mock.call_count, 5)
         self.assertEqual(completed["submission_status"], "complete")
         self.assertTrue(completed["resumed"])
         self.assertEqual(
             [job["job_id"] for job in completed["jobs"]],
-            ["100", "101", "102", "103"],
+            ["100", "101", "102", "103", "104", "105"],
         )
         self.assertEqual(completed["jobs"][1]["dependency"], "afterok:100")
         self.assertEqual(completed["jobs"][2]["dependency"], "afterok:101")
         self.assertEqual(completed["jobs"][3]["dependency"], "afterok:102")
+        self.assertEqual(completed["jobs"][4]["dependency"], "afterok:103")
+        self.assertEqual(completed["jobs"][5]["dependency"], "afterok:104")
         self.assertEqual(Path(completed["jobs"][0]["receipt_path"]), first_receipt)
 
     def test_every_accepted_job_has_durable_receipt(self) -> None:
@@ -183,7 +185,7 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
         with patch.object(
             self.base,
             "execute_sbatch",
-            side_effect=["200", "201", "202", "203"],
+            side_effect=["200", "201", "202", "203", "204", "205"],
         ):
             manifest = transactional_submit_finite_chain(
                 base=self.base,
@@ -192,7 +194,7 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
                 launch_gate_sha256=gate_sha,
             )
 
-        self.assertEqual(manifest["accepted_job_count"], 4)
+        self.assertEqual(manifest["accepted_job_count"], 6)
         for index, job in enumerate(manifest["jobs"]):
             receipt_path = Path(job["receipt_path"])
             self.assertTrue(receipt_path.is_file())
@@ -209,7 +211,7 @@ class ClpuNitrogenLaunchGateTests(unittest.TestCase):
         with patch.object(
             self.base,
             "execute_sbatch",
-            side_effect=["300", "301", "302", "303"],
+            side_effect=["300", "301", "302", "303", "304", "305"],
         ):
             transactional_submit_finite_chain(
                 base=self.base,
