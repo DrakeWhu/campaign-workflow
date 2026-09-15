@@ -56,8 +56,9 @@ with Path(sys.argv[1]).open(newline="", encoding="utf-8-sig") as stream:
         print(f"{row['CASE_ID']}\t{row['CASE_NAME']}")
 PY
 )
-python "${WF}/examples/sunrise/corrected_capillary/validate_nitrogen_gate_b.py" validate \
+python "${WF}/examples/sunrise/corrected_capillary/validate_nitrogen_gate_b.py" validate-iteration \
  --optimization-root "${ROOT}" --campaign-root "${ITER}" --workflow-root "${WF}" \
+ --iteration "${ITERATION}" \
  --guiding-analysis-root "${GA}" --optimizer-root "${OPT}" --output "${GATE_B}"
 if find "${ITER}" -type f \( -name '*.h5' -o -name '*.hdf5' \) -print -quit | grep -q .; then echo "PICMI produced HDF5" >&2; exit 1; fi
 echo "GATE_B_STATUS=pass"
