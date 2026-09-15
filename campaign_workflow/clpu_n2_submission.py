@@ -134,7 +134,7 @@ def build_gate_sbatch_command(*, base: Any, args: Any, iteration: int, dependenc
     loop_logs = args.optimization_root / "loop_logs"
     script = args.workflow_root / "examples" / "sunrise" / "corrected_capillary" / "run_nitrogen_gate_b_control_sunrise.sh"
     command = [
-        "sbatch", "--parsable", "--partition=T1H", "--time=01:00:00",
+        "sbatch", "--parsable", "--partition=T6H", "--time=06:00:00",
         "--nodes=1", "--ntasks=1", f"--job-name={job_name}",
         f"--output={loop_logs / (job_name + '_%j.out')}",
         f"--error={loop_logs / (job_name + '_%j.err')}",
