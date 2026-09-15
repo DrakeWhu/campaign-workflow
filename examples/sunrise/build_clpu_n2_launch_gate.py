@@ -61,11 +61,12 @@ def main() -> int:
     campaign = root / "iterations" / "iter_000"
     for case_id in expected:
         case = campaign / f"{case_id:03d}"
-        # Case directories are named with a numeric prefix; resolve exact materialized name.
-        matches = sorted(campaign.glob(f"{case_id:03d}_*"))
-        if len(matches) != 1:
-            raise RuntimeError(f"could not resolve materialized case {case_id:03d}")
-        case = matches[0]
+        if not case.is_dir():
+            # Some campaign names extend the numeric case prefix.
+            matches = sorted(campaign.glob(f"{case_id:03d}_*"))
+            if len(matches) != 1:
+                raise RuntimeError(f"could not resolve materialized case {case_id:03d}")
+            case = matches[0]
         case_state = read_json(case / "state.json")
         if case_state.get("state") != "Raw_delete_eligible":
             raise RuntimeError(f"case {case_id:03d} is not Raw_delete_eligible")
