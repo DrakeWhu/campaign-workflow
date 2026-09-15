@@ -52,10 +52,12 @@ def _require_cleanup_policy(base: ModuleType, argv: Sequence[str]) -> Path:
             "CLPU N2 launch requires explicit policy.cleanup_after_validation_required=true; "
             f"got {value!r} in {path}"
         )
+    gate_script = optimization_root / "workflow_placeholder"
+    # The resolved workflow check belongs below because argv can override it.
     return optimization_root
 
 
-def _force_validated_cleanup_export(command: Sequence[str]) -> list[str]:
+def _force_validated_cleanup_export(command: Sequence[str], *, iteration: int, iteration_root: Path) -> list[str]:
     out = list(command)
     found = False
     for index, item in enumerate(out):
@@ -73,6 +75,7 @@ def _force_validated_cleanup_export(command: Sequence[str]) -> list[str]:
             [
                 "CW_RAW_RETENTION_REQUIRED=0",
                 "CONFIRM_CLEANUP_EXECUTE=1",
+                f"CLPU_N2_GATE_B_RECEIPT={Path(iteration_root) / 'provenance' / f'clpu_n2_gate_b_iter_{iteration:03d}.json'}",
             ]
         )
         out[index] = "--export=" + ",".join(values)
@@ -92,7 +95,7 @@ def _install_validated_cleanup_contract(base: ModuleType) -> None:
             iteration=iteration,
             dependency=dependency,
         )
-        return _force_validated_cleanup_export(command)
+        return _force_validated_cleanup_export(command, iteration=iteration, iteration_root=args.optimization_root)
 
     def build_manifest(*, args: Any, jobs: list[dict[str, Any]], dry_run: bool) -> dict[str, Any]:
         manifest = original_build_manifest(args=args, jobs=jobs, dry_run=dry_run)
@@ -103,7 +106,29 @@ def _install_validated_cleanup_contract(base: ModuleType) -> None:
         }
         return manifest
 
+    def build_symbolic_chain(args: Any) -> list[dict[str, Any]]:
+        jobs: list[dict[str, Any]] = []
+        prior = (f"J_{args.initial_dependency_job_id}" if args.initial_dependency_job_id else None)
+        for iteration in range(args.start_iteration, args.final_iteration + 1):
+            gate = f"G_{iteration:03d}"
+            array = f"A_{iteration:03d}"
+            tick = f"T_{iteration:03d}"
+            jobs.extend([
+                {"kind": "gate", "symbol": gate, "iteration": iteration,
+                 "dependency": None if prior is None else f"afterok:{prior}", "job_id": None,
+                 "submit_command": None},
+                {"kind": "array", "symbol": array, "iteration": iteration,
+                 "dependency": f"afterok:{gate}", "job_id": None,
+                 "submit_command": None},
+                {"kind": "tick", "symbol": tick, "iteration": iteration,
+                 "next_iteration": iteration + 1, "dependency": f"afterok:{array}",
+                 "job_id": None, "submit_command": None},
+            ])
+            prior = tick
+        return jobs
+
     base.build_array_sbatch_command = build_array_sbatch_command
+    base.build_symbolic_chain = build_symbolic_chain
     base.build_manifest = build_manifest
 
 
