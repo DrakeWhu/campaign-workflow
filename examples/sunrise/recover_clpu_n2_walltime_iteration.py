@@ -143,14 +143,20 @@ def job_fields(job_id: str) -> dict[str, str]:
 def array_accounting(job_id: str) -> dict[int, str]:
     completed = run([
         "sacct", "-X", "-n", "-P", "-j", job_id,
-        "-o", "ArrayJobID,ArrayTaskID,State",
+        "-o", "JobID,State",
     ])
     states: dict[int, str] = {}
     for line in completed.stdout.splitlines():
         fields = line.split("|")
-        if len(fields) < 3 or fields[0] != job_id or not fields[1].isdigit():
+        if len(fields) < 2:
             continue
-        states[int(fields[1])] = fields[2].split("+", 1)[0]
+        prefix = f"{job_id}_"
+        if not fields[0].startswith(prefix):
+            continue
+        task_id = fields[0][len(prefix) :]
+        if not task_id.isdigit():
+            continue
+        states[int(task_id)] = fields[1].split("+", 1)[0]
     return states
 
 
