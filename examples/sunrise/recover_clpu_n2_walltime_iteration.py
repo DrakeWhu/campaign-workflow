@@ -467,6 +467,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         receipt = {"schema_version": 1, "created_at": now_utc(), **plan}
         receipt["dry_run"] = False
         receipt["status"] = "preparing_cases"
+        state_source = args.optimization_root / "optimization_state.json"
+        state_backup = recovery_path.with_name(
+            recovery_path.stem + "_optimization_state_before.json"
+        )
+        shutil.copy2(state_source, state_backup)
+        receipt["optimization_state_backup"] = str(state_backup)
         write_json_atomic(recovery_path, receipt)
 
     retry_job_id = str(receipt.get("retry_array_job_id", ""))
