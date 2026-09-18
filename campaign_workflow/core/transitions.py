@@ -63,6 +63,10 @@ SIMULATION_FINAL_COMPATIBLE_STATES = {
     "Running",
 }
 
+SIMULATION_RETRY_COMPATIBLE_STATES = {
+    "Failed",
+}
+
 MARK_SIM_DONE_COMPATIBLE_STATES = {
     "Created",
     "Running",
@@ -273,6 +277,22 @@ def simulation_failure_transition(state_doc: dict[str, Any], *, reason: str) -> 
         state_doc,
         to_state="Failed",
         operation="mark_sim_failed",
+        reason=reason,
+    )
+
+
+def simulation_retry_transition(state_doc: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    current = state_name(state_doc)
+    if current not in SIMULATION_RETRY_COMPATIBLE_STATES:
+        allowed = ", ".join(sorted(SIMULATION_RETRY_COMPATIBLE_STATES))
+        raise ValueError(
+            f"simulation retry is not allowed from state {current!r}; "
+            f"allowed states: {allowed}"
+        )
+    return transition_state_document(
+        state_doc,
+        to_state="Retryable",
+        operation="mark_sim_retryable",
         reason=reason,
     )
 
