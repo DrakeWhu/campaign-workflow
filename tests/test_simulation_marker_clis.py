@@ -7,6 +7,7 @@ from pathlib import Path
 
 from campaign_workflow.cli.init_case_states import main as init_case_states_main
 from campaign_workflow.cli.mark_sim_failed import main as mark_sim_failed_main
+from campaign_workflow.cli.mark_sim_retryable import main as mark_sim_retryable_main
 from campaign_workflow.cli.mark_sim_running import main as mark_sim_running_main
 from campaign_workflow.cli.mark_sim_submitted import main as mark_sim_submitted_main
 from campaign_workflow.core.atomic_io import read_json
@@ -228,6 +229,42 @@ class SimulationMarkerCliTests(unittest.TestCase):
         self.assertEqual(latest["marker_path"], "post/sim_failed.json")
 
         self.assertFalse(validation["cleanup"]["cleanup_allowed"])
+
+    def test_mark_retryable_after_failed_writes_explicit_retry_evidence(self) -> None:
+        case_dir = self.root / "000_fake_case"
+        self._mark_submitted(0)
+        self._mark_running(0)
+        self.assertEqual(
+            mark_sim_failed_main([
+                "--campaign-root", str(self.root), "--case-id", "0",
+                "--return-code", "124", "--error", "walltime",
+            ]),
+            0,
+        )
+
+        rc = mark_sim_retryable_main([
+            "--campaign-root", str(self.root),
+            "--case-id", "0",
+            "--scheduler", "slurm",
+            "--failed-job-id", "617375",
+            "--failed-array-task-id", "0",
+            "--reason", "verified SLURM TIMEOUT",
+        ])
+
+        self.assertEqual(rc, 0)
+        state = read_json(case_dir / "state.json")
+        marker = read_json(case_dir / "post/sim_retryable.json")
+        validation = read_json(case_dir / "validation.json")
+        self.assertEqual(state["state"], "Retryable")
+        self.assertEqual(state["history"][-1]["from"], "Failed")
+        self.assertEqual(state["history"][-1]["operation"], "mark_sim_retryable")
+        self.assertTrue(marker["ok"])
+        self.assertEqual(marker["failed_job_id"], "617375")
+        self.assertEqual(marker["reason"], "verified SLURM TIMEOUT")
+        self.assertEqual(
+            validation["simulation"]["latest"]["operation"],
+            "mark_sim_retryable",
+        )
 
     def test_dry_run_does_not_write_submitted_marker_state_or_validation(self) -> None:
         case_dir = self.root / "000_fake_case"
