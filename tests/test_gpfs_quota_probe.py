@@ -19,3 +19,18 @@ class GpfsQuotaTests(unittest.TestCase):
         for output in [HEADER+'\n'+ROW+'\n'+ROW,HEADER+'\n'+ROW.replace(':100:',':NaN:')]:
             with self.assertRaises(GuardError):
                 _parse_mmlsquota_output(output,'home','juan')
+
+
+class LustreWrappedQuotaTests(unittest.TestCase):
+    def test_actual_sunrise_wrapped_row(self):
+        from campaign_workflow.guards import _parse_lfs_quota_output
+        output = """Disk quotas for usr jrodriguez (uid 1156):
+     Filesystem    used   quota   limit   grace   files   quota   limit   grace
+/gpfs/home/jrodriguez
+                 954.7G      0k      1T       -  311020       0       0       -
+uid 1156 is using default file quota setting
+"""
+        row = _parse_lfs_quota_output(output, '/gpfs/home/jrodriguez')
+        self.assertEqual(row['limit_bytes'], 1024**4)
+        self.assertEqual(row['files_used'], 311020)
+        self.assertAlmostEqual(row['used_bytes']/1024**3, 954.7, places=6)

@@ -998,8 +998,16 @@ def _normalize_quota_filesystem(value: str) -> str:
 
 
 def _parse_lfs_quota_output(stdout: str, filesystem: str) -> dict[str, Any]:
+    pending_filesystem = None
     for line in stdout.splitlines():
         parts = line.split()
+        # lfs wraps long filesystem paths onto a separate line.
+        if len(parts) == 1 and parts[0].startswith("/"):
+            pending_filesystem = parts[0]
+            continue
+        if pending_filesystem is not None:
+            parts = [pending_filesystem] + parts
+            pending_filesystem = None
         if len(parts) < 4:
             continue
 
