@@ -52,6 +52,14 @@ def require_launch_gate(
     if not isinstance(payload, dict):
         raise ClpuN2SubmissionError("CLPU N2 launch gate receipt root must be an object")
 
+    if payload.get("contract_id") == "clpu_n2_cold_sobol_launch_v1":
+        from campaign_workflow.clpu_n2_cold_start import verify_cold_launch_receipt
+        try:
+            verify_cold_launch_receipt(root, payload, start_iteration)
+        except (ValueError, KeyError, OSError) as exc:
+            raise ClpuN2SubmissionError(f"cold launch rejected: {exc}") from exc
+        return path, payload, sha256_file(path)
+
     expected: dict[str, Any] = {
         "schema_version": 1,
         "contract_id": LAUNCH_GATE_CONTRACT_ID,

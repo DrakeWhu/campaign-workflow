@@ -275,6 +275,18 @@ def resolve_parameters(
         f"{iteration}:{iteration}" for iteration in exact_iterations
     )
 
+    # Opt-in temporal diagnostics. Keep the exact exit targets and unfiltered
+    # particles: the 50 MeV selection is applied during reduction only.
+    evolution = str(env.get("CAP_BEAM_EVOLUTION", "0")) == "1"
+    if evolution:
+        period = int(resolved["field_diagnostic_period"])
+        schedule = sorted(set(range(0, max_steps + 1, period)) |
+                          set(exact_iterations) | {max_steps})
+        intervals = ",".join(f"{it}:{it}" for it in schedule)
+        resolved["beam_diagnostic_iterations"] = schedule
+        resolved["beam_diagnostic_policy"] = "synchronized_unfiltered_full_series_v1"
+        resolved["field_diagnostic_intervals"] = intervals
+
     wrapper_path = Path(__file__).resolve()
     resolved.update(
         {
@@ -513,7 +525,7 @@ def main() -> None:
         picmi.FieldDiagnostic(
             name="fields",
             grid=grid,
-            period=resolved["field_diagnostic_period"],
+            period=resolved.get("field_diagnostic_intervals", resolved["field_diagnostic_period"]),
             data_list=field_data,
             write_dir="diags",
             warpx_format="openpmd",

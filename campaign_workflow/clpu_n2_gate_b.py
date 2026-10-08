@@ -309,6 +309,19 @@ def validate_materialized_case(
         raise GateBError(f"{case_name}: exact dual target set mismatch")
     target_iterations = sorted(int(targets[key]["iteration"]) for key in ("plateau_exit", "capillary_exit"))
     expected_intervals = ",".join(f"{it}:{it}" for it in target_iterations)
+    if env.get("CAP_BEAM_EVOLUTION") == "1":
+        if resolved.get("beam_diagnostic_policy") != "synchronized_unfiltered_full_series_v1":
+            raise GateBError(f"{case_name}: missing synchronized beam policy")
+        period = int(resolved["field_diagnostic_period"])
+        maximum = int(resolved["max_steps"])
+        if period <= 0:
+            raise GateBError(f"{case_name}: invalid field period")
+        schedule = sorted(set(range(0, maximum + 1, period)) | set(target_iterations) | {maximum})
+        expected_intervals = ",".join(f"{it}:{it}" for it in schedule)
+        if resolved.get("beam_diagnostic_iterations") != schedule or resolved.get("field_diagnostic_intervals") != expected_intervals:
+            raise GateBError(f"{case_name}: beam/field schedule mismatch")
+        if f'fields.intervals = "{expected_intervals}"' not in serialized_path.read_text():
+            raise GateBError(f"{case_name}: serialized synchronized field intervals missing")
     if resolved.get("particle_diagnostic_intervals") != expected_intervals:
         raise GateBError(f"{case_name}: exact particle intervals mismatch")
     if any(it <= 0 or it > int(resolved["max_steps"]) for it in target_iterations):
@@ -498,6 +511,19 @@ def build_gate_b_receipt(
 
 
 
+def guiding_commit(optimization_root: Path) -> str:
+    config = _read_json(optimization_root / "optimization.json")
+    contract = config.get("beam_campaign", {})
+    if not contract:
+        return EXPECTED_GUIDING_COMMIT
+    if contract.get("contract_id") != "clpu_n2_beam_sobol_v1":
+        raise GateBError("unknown beam campaign contract")
+    commit = contract.get("guiding_analysis_commit", "")
+    if not isinstance(commit, str) or len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit):
+        raise GateBError("beam campaign requires an exact guiding commit")
+    return commit
+
+
 def build_iteration_gate_b_receipt(
     *,
     optimization_root: Path,
@@ -524,8 +550,21 @@ def build_iteration_gate_b_receipt(
     ):
         raise GateBError("iteration Gate B requires 30 fs intensity FWHM")
 
+    contract = _read_json(optimization_root / "optimization.json").get("beam_campaign")
+    if contract:
+        source = workflow_root / "examples/sunrise/corrected_capillary"
+        for materialized, reviewed in [("campaign.json", "campaign_nitrogen_beam_evolution.json"), ("input_template.py", "nitrogen_input_template.py")]:
+            # Preparation changes only the campaign_name, so compare structured config.
+            if materialized == "campaign.json":
+                left, right = _read_json(campaign_root / materialized), _read_json(source / reviewed)
+                left.pop("campaign_name", None); right.pop("campaign_name", None)
+                if left != right:
+                    raise GateBError("beam campaign contract differs from reviewed source")
+            elif sha256_file(campaign_root / materialized) != sha256_file(source / reviewed):
+                raise GateBError("beam input differs from reviewed source")
+
     workflow_repo = git_snapshot(workflow_root)
-    guiding_repo = git_snapshot(guiding_analysis_root, expected_head=EXPECTED_GUIDING_COMMIT)
+    guiding_repo = git_snapshot(guiding_analysis_root, expected_head=guiding_commit(optimization_root))
     optimizer_repo = git_snapshot(optimizer_root, expected_head=EXPECTED_OPTIMIZER_COMMIT)
     assets = {
         rel: _asset(workflow_root / rel)
@@ -603,7 +642,7 @@ def verify_runtime_assets(
 
     current_repos = {
         "campaign_workflow": git_snapshot(workflow_root.expanduser().resolve(strict=True)),
-        "guiding_analysis_module": git_snapshot(guiding_analysis_root.expanduser().resolve(strict=True), expected_head=EXPECTED_GUIDING_COMMIT),
+        "guiding_analysis_module": git_snapshot(guiding_analysis_root.expanduser().resolve(strict=True), expected_head=guiding_commit(optimization_root)),
         "campaign_optimizer": git_snapshot(optimizer_root.expanduser().resolve(strict=True), expected_head=EXPECTED_OPTIMIZER_COMMIT),
     }
     recorded_repos = receipt.get("repos", {})

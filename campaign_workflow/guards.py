@@ -940,6 +940,9 @@ def _run_quota_probe(
     if kind == "lfs_quota_user":
         return _run_lfs_quota_user_probe(optimization_root, probe)
 
+    if kind == "mmlsquota_user":
+        return _run_mmlsquota_user_probe(optimization_root, probe)
+
     raise GuardError(f"unsupported quota_probe kind: {kind}")
 
 
@@ -1061,3 +1064,52 @@ def _parse_human_bytes(text: str) -> int:
         raise GuardError(f"unsupported byte suffix in quantity: {text!r}")
 
     return int(value * factors[suffix])
+
+
+def _parse_mmlsquota_output(stdout: str, filesystem: str, user: str) -> dict[str, Any]:
+    """IBM mmlsquota -Y is header-described colon data in KB (not auto units)."""
+    header = None
+    matches = []
+    for line in stdout.splitlines():
+        parts = line.split(":")
+        if len(parts) < 3 or parts[:2] != ["mmlsquota", "user"]:
+            continue
+        if parts[2] == "HEADER":
+            header = parts
+            continue
+        if header is None or len(parts) != len(header):
+            raise GuardError("malformed mmlsquota user row/header")
+        row = dict(zip(header[6:], parts[6:]))
+        if row.get("filesystemName") != filesystem or row.get("quotaType") != "USR":
+            continue
+        if row.get("name") != user and row.get("id") != user:
+            continue
+        try:
+            used, doubt, soft, hard = [int(row[k]) * 1024 for k in
+                ("blockUsage", "blockInDoubt", "blockQuota", "blockLimit")]
+        except (KeyError, ValueError) as exc:
+            raise GuardError("invalid mmlsquota block fields") from exc
+        if min(used, doubt, soft, hard) < 0:
+            raise GuardError("negative mmlsquota values")
+        limits = [v for v in (soft, hard) if v > 0]
+        matches.append(dict(quota_used_bytes=used+doubt, quota_observed_used_bytes=used,
+                            quota_in_doubt_bytes=doubt, quota_soft_bytes=soft,
+                            quota_limit_bytes=min(limits) if limits else None))
+    if len(matches) != 1:
+        raise GuardError("mmlsquota must identify exactly one user/filesystem quota row")
+    return matches[0]
+
+
+def _run_mmlsquota_user_probe(optimization_root: Path, probe: dict[str, Any]) -> dict[str, Any]:
+    user = str(probe.get("user") or os.environ.get("USER") or "").strip()
+    filesystem = str(probe.get("filesystem") or "").strip()
+    if not user or not filesystem:
+        raise GuardError("mmlsquota_user requires user and filesystem")
+    executable = str(probe.get("executable") or shutil.which("mmlsquota") or "/usr/lpp/mmfs/bin/mmlsquota")
+    command = [executable, "-Y", "-u", user, filesystem]
+    result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=30)
+    if result.returncode:
+        raise GuardError(f"mmlsquota failed: {result.stderr.strip()}")
+    parsed = _parse_mmlsquota_output(result.stdout, filesystem, user)
+    return dict(parsed, quota_probe_kind="mmlsquota_user", quota_command=command,
+                quota_user=user, quota_raw_stdout=result.stdout)

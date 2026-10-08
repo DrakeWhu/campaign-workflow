@@ -54,5 +54,18 @@ export CLPU_N2_GATE_B_RECEIPT="${GATE_B_RECEIPT}"
     --guiding-analysis-root "${GUIDING_ANALYSIS_ROOT}" \
     --optimizer-root "${OPTIMIZER_ROOT}"
 
+# Reuse the native quota guard before EACH case, including within an array.
+"${WORKFLOW_PYTHON}" - "${OPTIMIZATION_ROOT}" <<'QUOTA'
+import json, sys
+from pathlib import Path
+from campaign_workflow.guards import GuardContext, evaluate_quota_guard
+root=Path(sys.argv[1]); config=json.loads((root/'optimization.json').read_text())
+if config.get('beam_campaign'):
+    guard=evaluate_quota_guard(GuardContext(root, {}, 'beam_case_preflight'),config.get('guards',{}))
+    print(json.dumps(guard))
+    if guard['status'] != 'pass':
+        raise SystemExit('User quota guard did not pass before beam simulation')
+QUOTA
+
 echo "[CLPU-N2-WARPX] Gate B runtime closure revalidated before PICMI/WarpX entry."
 exec "${GENERIC_RUNNER}" "${CASE_DIR}"

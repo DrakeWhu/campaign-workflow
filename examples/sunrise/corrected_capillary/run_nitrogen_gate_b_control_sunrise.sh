@@ -28,7 +28,14 @@ if find "${ITER}" -path '*/post/sim_submitted.json' -type f -print -quit | grep 
 if ! type module >/dev/null 2>&1; then source /etc/profile.d/modules.sh; fi
 module purge; module use "${HOME}/apps/modules"
 module load Git/2.41.0 GCC/12.1.0 Python/3.14.3 OpenBLAS/0.3.31 warpx/26.05-gcc12-openmpi413-all-dims
-[[ "$(git -C "${GA}" rev-parse HEAD)" == "e809b43d2071e5fa5cb39de2613f3e9d170bea84" ]]
+EXPECTED_GA="$(PYTHONPATH="${WF}" "${HOME}/apps/venvs/campaign-workflow-py310/bin/python" - "${ROOT}" <<'PYCODE'
+from pathlib import Path
+import sys
+from campaign_workflow.clpu_n2_gate_b import guiding_commit
+print(guiding_commit(Path(sys.argv[1])))
+PYCODE
+)"
+[[ "$(git -C "${GA}" rev-parse HEAD)" == "${EXPECTED_GA}" ]]
 [[ "$(git -C "${OPT}" rev-parse HEAD)" == "73dab76305f547581c57b70a900706374c929141" ]]
 for repo in "${WF}" "${GA}" "${OPT}"; do [[ -z "$(git -C "${repo}" status --porcelain)" ]] || { echo "dirty checkout: ${repo}" >&2; exit 1; }; done
 export PYTHON314_ROOT=/APPS/centos7/centos79/software/Compiler/GCC-12.1/Python/3.14.3

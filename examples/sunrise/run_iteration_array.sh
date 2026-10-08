@@ -108,4 +108,13 @@ if [[ -n "${CW_CASE_RUNNER:-}" ]]; then
 fi
 
 cd "${CAMPAIGN_ROOT}"
+if [[ "${CW_STOP_ON_CASE_FAILURE:-0}" == "1" ]]; then
+    if bash "${CASE_CYCLE_SCRIPT}"; then
+        exit 0
+    else
+        rc=$?
+        touch "${OPTIMIZATION_ROOT}/STOP_OPTIMIZATION"
+        exit "${rc}"
+    fi
+fi
 exec bash "${CASE_CYCLE_SCRIPT}"

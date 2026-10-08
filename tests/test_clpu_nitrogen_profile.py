@@ -57,6 +57,21 @@ class ClpuNitrogenProfileTests(unittest.TestCase):
             "CAP_LASER_INTENSITY_FWHM_S": "30e-15",
         }
 
+    def test_temporal_diagnostics_keep_exact_exits_and_physics(self):
+        env = self.base_env("0.005")
+        old = self.nitrogen.resolve_parameters(env)
+        new = self.nitrogen.resolve_parameters(dict(env, CAP_BEAM_EVOLUTION="1"))
+        expected = sorted(set(range(0, new['max_steps']+1, new['field_diagnostic_period'])) |
+                          {new['max_steps']} |
+                          {v['iteration'] for v in new['particle_diagnostic_targets'].values()})
+        self.assertEqual(new['beam_diagnostic_iterations'], expected)
+        self.assertEqual(new['field_diagnostic_intervals'], new['particle_diagnostic_intervals'])
+        for key in ('density_expression','channel_quadratic_density_coefficient_m5',
+                    'particle_diagnostic_targets','grid','max_steps','laser_a0'):
+            self.assertEqual(old[key],new[key])
+        self.assertFalse(new['particle_diagnostic_forward_only'])
+        self.assertEqual(new['particle_diagnostic_min_energy_MeV'],0.)
+
     def test_zero_fraction_preserves_historical_baseline_physics(self) -> None:
         env = self.base_env("0")
         historical = self.baseline.resolve_parameters(env)

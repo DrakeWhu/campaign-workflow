@@ -107,6 +107,28 @@ python "${WORKFLOW_ROOT}/examples/sunrise/corrected_capillary/validate_animation
     "${CASE_DIR}/animations/eperp2.mp4" \
     "${CASE_DIR}/animations/ez_wake.mp4"
 
+# Enabled by the materialized campaign, not by an ambient shell override.
+if python - "${RESOLVED}" <<'CHECK'
+import json, sys
+raise SystemExit(0 if json.load(open(sys.argv[1])).get("beam_diagnostic_policy") == "synchronized_unfiltered_full_series_v1" else 1)
+CHECK
+then
+    python scripts/analyze_beam_evolution.py \
+        --case-dir "${CASE_DIR}" --species "${PARTICLE_SPECIES}" \
+        --energy-threshold-mev 50 --combined-scope --allow-partial-coverage --overwrite
+    # Existing outputs indicate a retry. Archive them rather than delete or mix frames.
+    if [[ -d "${CASE_DIR}/beam_animations" ]]; then
+        mv "${CASE_DIR}/beam_animations" "${CASE_DIR}/beam_animations_previous_$(date -u +%Y%m%dT%H%M%S)_$$"
+    fi
+    python scripts/animate_beam_evolution.py \
+        --case-dir "${CASE_DIR}" --outdir "${CASE_DIR}/beam_animations" \
+        --species "${PARTICLE_SPECIES}" \
+        --rho-fields "rho_preionized_background_electrons,rho_nitrogen_ionized_electrons" \
+        --discard-pngs
+    python "${WORKFLOW_ROOT}/examples/sunrise/corrected_capillary/validate_beam_products.py" \
+        --case-dir "${CASE_DIR}"
+fi
+
 for required in \
     "${CASE_DIR}/guiding_metrics.csv" \
     "${CASE_DIR}/guiding_singlecase_score.csv" \
