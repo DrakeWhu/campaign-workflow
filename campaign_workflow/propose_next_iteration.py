@@ -449,7 +449,9 @@ def render_external_command(
         shell_command = (
             "source "
             + shlex.quote(str(env_script))
-            + " >/dev/null 2>&1 && exec "
+            + " >/dev/null 2>&1 && cd "
+            + shlex.quote(str(working_directory))
+            + " && exec "
             + " ".join(shlex.quote(part) for part in rendered)
         )
         effective_command = ["bash", "-lc", shell_command]
