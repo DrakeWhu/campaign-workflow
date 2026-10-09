@@ -10,6 +10,8 @@ trap 'echo "[CLPU-N2-GATE-B-CONTROL] ERROR at line ${LINENO}: ${BASH_COMMAND}" >
 : "${CW_GATE_ITERATION:?missing CW_GATE_ITERATION}"
 : "${CW_WORKFLOW_ROOT:?missing CW_WORKFLOW_ROOT}"
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then echo "gate must run as Slurm job" >&2; exit 2; fi
+: "${CW_WORKFLOW_ENV:?missing CW_WORKFLOW_ENV}"
+source "${CW_WORKFLOW_ENV}"
 ROOT="$(cd "${CW_OPTIMIZATION_ROOT}" && pwd -P)"
 WF="$(cd "${CW_WORKFLOW_ROOT}" && pwd -P)"
 GA="${GUIDING_ANALYSIS_ROOT:-${HOME}/apps/src/guiding_analysis_module-clpu-n2-exact-exit}"
@@ -28,7 +30,10 @@ if find "${ITER}" -path '*/post/sim_submitted.json' -type f -print -quit | grep 
 if ! type module >/dev/null 2>&1; then source /etc/profile.d/modules.sh; fi
 module purge; module use "${HOME}/apps/modules"
 module load Git/2.41.0 GCC/12.1.0 Python/3.14.3 OpenBLAS/0.3.31 warpx/26.05-gcc12-openmpi413-all-dims
-EXPECTED_GA="$(PYTHONPATH="${WF}" "${HOME}/apps/venvs/campaign-workflow-py310/bin/python" - "${ROOT}" <<'PYCODE'
+export PYTHON314_ROOT=/APPS/centos7/centos79/software/Compiler/GCC-12.1/Python/3.14.3
+export LD_LIBRARY_PATH="${PYTHON314_ROOT}/lib:${LD_LIBRARY_PATH:-}"
+source "${HOME}/apps/venvs/warpx-26.05-py314/bin/activate"
+EXPECTED_GA="$(PYTHONPATH="${WF}" "${HOME}/apps/venvs/warpx-26.05-py314/bin/python" - "${ROOT}" <<'PYCODE'
 from pathlib import Path
 import sys
 from campaign_workflow.clpu_n2_gate_b import guiding_commit
@@ -38,9 +43,6 @@ PYCODE
 [[ "$(git -C "${GA}" rev-parse HEAD)" == "${EXPECTED_GA}" ]]
 [[ "$(git -C "${OPT}" rev-parse HEAD)" == "73dab76305f547581c57b70a900706374c929141" ]]
 for repo in "${WF}" "${GA}" "${OPT}"; do [[ -z "$(git -C "${repo}" status --porcelain)" ]] || { echo "dirty checkout: ${repo}" >&2; exit 1; }; done
-export PYTHON314_ROOT=/APPS/centos7/centos79/software/Compiler/GCC-12.1/Python/3.14.3
-export LD_LIBRARY_PATH="${PYTHON314_ROOT}/lib:${LD_LIBRARY_PATH:-}"
-source "${HOME}/apps/venvs/warpx-26.05-py314/bin/activate"
 export PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 export PYTHONPATH="${WF}" WFLOW_SRC="${WF}" CAP_CORRECTED_INPUT_TEMPLATE="${WF}/examples/sunrise/corrected_capillary/input_template.py"
 export GUIDING_ANALYSIS_ROOT="${GA}" CLPU_N2_OPTIMIZER_ROOT="${OPT}"

@@ -115,6 +115,8 @@ CHECK
 then
     python scripts/analyze_beam_evolution.py \
         --case-dir "${CASE_DIR}" --species "${PARTICLE_SPECIES}" \
+        --species-diag "preionized_background_electrons=${PARTICLE_DIAG_DIR}" \
+        --species-diag "nitrogen_ionized_electrons=${PARTICLE_DIAG_DIR}" \
         --energy-threshold-mev 50 --combined-scope --allow-partial-coverage --overwrite
     # Existing outputs indicate a retry. Archive them rather than delete or mix frames.
     if [[ -d "${CASE_DIR}/beam_animations" ]]; then
