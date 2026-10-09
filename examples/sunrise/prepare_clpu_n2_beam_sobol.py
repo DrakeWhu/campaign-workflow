@@ -66,6 +66,8 @@ def prepare(root, wf, optimizer, guiding, *, require_clean=True, quota_probe=Non
     if quota_probe is not None:
         workflow['guards']['quota']['quota_probe']=quota_probe
     workflow['stopping']['max_iterations']=4
+    # Sobol continuation requires validated cases, not fit-eligible observations.
+    workflow['stopping']['min_new_valid_observations']=0
     (root/'optimization.json').write_text(json.dumps(workflow,indent=2)+'\n')
     runtime=dict(os.environ,PYTHONPATH=f'{optimizer}:{wf}:{guiding}')
     def run(*args):

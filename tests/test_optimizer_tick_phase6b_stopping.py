@@ -46,6 +46,29 @@ class OptimizerTickPhase6BStoppingTests(unittest.TestCase):
         self.assertIn("stopping_report", data)
         self.assertTrue(data["stopping_report"]["can_propose_next_iteration"])
 
+    def test_sobol_can_continue_without_fit_observations(self) -> None:
+        self._write_stopping_signals(n_new_valid=0)
+        self._update_stopping({"min_new_valid_observations": 0})
+        rc, stdout, stderr = self._run_cli(
+            "--action", "check_stopping", "--iteration", "0", "--dry-run"
+        )
+        self.assertEqual(rc, 0, stderr)
+        report = json.loads(stdout)["stopping_report"]
+        self.assertTrue(report["can_propose_next_iteration"])
+        self.assertEqual(report["policy"]["min_new_valid_observations"], 0)
+
+    def test_sobol_still_blocks_invalid_cases(self) -> None:
+        self._write_stopping_signals(n_new_valid=0)
+        self._update_stopping({"min_new_valid_observations": 0})
+        self._write_optimization_state(status="closed", valid=5)
+        rc, stdout, stderr = self._run_cli(
+            "--action", "check_stopping", "--iteration", "0", "--dry-run"
+        )
+        self.assertEqual(rc, 0, stderr)
+        report = json.loads(stdout)["stopping_report"]
+        self.assertFalse(report["can_propose_next_iteration"])
+        self.assertIn("valid fraction below policy", report["reasons"][0])
+
     def test_check_stopping_write_state_writes_report_and_updates_state(self) -> None:
         rc, stdout, stderr = self._run_cli(
             "--action",

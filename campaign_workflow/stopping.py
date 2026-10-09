@@ -452,7 +452,10 @@ def _merged_policy(
             out[key] = stopping_config[key]
 
     # Backward-compatible legacy name.
-    if "min_reduced_valid_to_continue" in legacy_policy:
+    if (
+        "min_reduced_valid_to_continue" in legacy_policy
+        and "min_new_valid_observations" not in out
+    ):
         out["min_new_valid_observations"] = legacy_policy[
             "min_reduced_valid_to_continue"
         ]
