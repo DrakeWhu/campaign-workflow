@@ -17,6 +17,14 @@ No workflow command may delete raw data unless all of the following are true:
 
 ## Cleanup configuration
 
+These are execution safeguards, not proof that all scientifically necessary
+products have been retained. The campaign must first define the reduced
+products needed for its objectives and future comparisons. In particular,
+the capillary example's required guiding CSV does not validate every particle
+product, even though its raw cleanup patterns can include particle HDF5.
+The open contract decisions and proposed future tests are in
+`INTEGRATION_REVIEW.md`. No cleanup behavior is changed by that review.
+
 ```json
 "cleanup": {
   "raw_delete_globs": ["diags/**/*.h5", "diags/**/*.hdf5"],

@@ -151,11 +151,18 @@ Supported production adapter:
 command
 ```
 
-Supported reduced output kind:
+Supported reduced output kinds in the current implementation:
 
 ```text
 csv
+file
 ```
+
+For `file`, declare `allowed_suffixes` and optionally `min_bytes` (default 1).
+The validator checks a safe regular file and size, not its scientific content.
+For `csv`, configure `required_columns` and `min_rows`. Both kinds support
+`required`; optional failures remain visible in validation evidence.
+See `ANALYSIS_MODULE_CONTRACT.md` for the consumer-facing semantics.
 
 Available command placeholders include:
 
@@ -164,6 +171,7 @@ Available command placeholders include:
 {case_dir}
 {case_id}
 {case_name}
+{workflow_root}
 ```
 
 The command receives environment variables such as `CAMPAIGN_ROOT`, `CAMPAIGN_NAME`, `CASE_DIR`, `CASE_ID`, and `CASE_NAME` from the command adapter.
