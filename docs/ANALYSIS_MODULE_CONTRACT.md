@@ -29,6 +29,7 @@ Supported placeholders include:
 {case_dir}
 {case_id}
 {case_name}
+{workflow_root}
 ```
 
 The adapter also provides useful environment variables such as:
@@ -56,10 +57,11 @@ The analysis command should not hard-code campaign roots. Use wrapper scripts fo
 
 The command must write the reduced outputs declared under `analysis.outputs`.
 
-Supported output kind:
+Supported output kinds in the current implementation:
 
 ```text
 csv
+file
 ```
 
 CSV validation checks:
@@ -70,6 +72,17 @@ CSV validation checks:
 - all configured `required_columns` present;
 - required outputs must pass;
 - optional outputs may be absent without failing the case.
+
+Generic `file` outputs require a safe case-local regular file, an explicit
+non-empty `allowed_suffixes` list, and a positive minimum size (`min_bytes`,
+default 1). They do not validate image pixels, video decoding, or scientific
+content. CSV validation checks structure, not finite physical values or units.
+
+Each output's evidence records `ok` and `required`. A missing optional output
+can have `ok=false` while the case passes required-output validation. Consumers
+must not assume that case success means every evidence entry is successful.
+The current optimizer's stricter behavior is recorded in
+`INTEGRATION_REVIEW.md`; this documentation does not change that behavior.
 
 Example:
 
@@ -114,3 +127,9 @@ examples/capillary_guiding/run_guiding_case_analysis_sunrise.sh
 ```
 
 That wrapper resolves WarpX/openPMD field diagnostics for one case and writes `guiding_metrics.csv` as the official reduced output.
+
+The wrapper can also run particle analysis. The example campaign configuration
+currently declares only `guiding_metrics.csv` as required, although its cleanup
+globs cover HDF5 under `diags/`. That declaration does not establish completeness
+of particle summaries, acceptance curves, or optimizer-facing sidecars.
+See `INTEGRATION_REVIEW.md` before defining a production retention contract.

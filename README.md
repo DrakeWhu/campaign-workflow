@@ -186,6 +186,16 @@ python -m unittest discover -s tests -p "test_*.py"
 
 Do not use `pytest` as the project test command.
 
+The suite creates temporary fixtures and includes deletion tests on fake data.
+Use an isolated Git export when the checkout must remain untouched.
+`docs/BASELINE_2026-10-20.md` records the tested commit, live remote comparison,
+scientific interpreter, package inventory, and isolated test results.
+
+Before changing reduced-product retention, species selection, or temporal and
+optional-output compatibility, review `docs/INTEGRATION_REVIEW.md`. It records
+current behavior and scientific decisions still needed; it does not implement
+new cleanup or optimizer policies.
+
 ## Version
 
 Current frozen functional version: `1.0.0`.

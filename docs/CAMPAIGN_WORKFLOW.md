@@ -157,7 +157,8 @@ Scientific interpretation belongs to the external analysis module.
 
 ## Reduced validation
 
-`validate_reduced_case` validates `analysis.outputs`. The supported reduced output kind in `1.0.0` is CSV.
+`validate_reduced_case` validates `analysis.outputs`. The current implementation
+supports both `csv` and generic `file` outputs.
 
 For CSV outputs the validator checks:
 
@@ -166,6 +167,13 @@ For CSV outputs the validator checks:
 - minimum row count;
 - required columns;
 - required/optional output semantics.
+
+Generic files also require safe case-local regular paths, explicit allowed
+suffixes, and a minimum size. Neither validator establishes scientific
+completeness, numerical validity, or image/video correctness. An optional
+failure may be recorded without failing the case. See
+`ANALYSIS_MODULE_CONTRACT.md` and the pending decisions in
+`INTEGRATION_REVIEW.md`.
 
 `--legacy-reduced-only` exists for adopted campaigns where raw diagnostics are no longer available. It does not create raw validation evidence and never authorizes cleanup.
 
