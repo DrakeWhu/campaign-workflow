@@ -6,12 +6,6 @@ on:
       - ".agents/skills/sunrise-runtime/**"
       - "tests/test_sunrise_runtime_inspector.py"
       - ".github/workflows/sunrise-runtime-inspector.yml"
-  push:
-    paths:
-      - ".agents/skills/sunrise-runtime/**"
-      - "tests/test_sunrise_runtime_inspector.py"
-      - ".github/workflows/sunrise-runtime-inspector.yml"
-
 permissions:
   contents: read
 
@@ -25,9 +19,9 @@ jobs:
         python-version: ["3.10", "3.14"]
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Test standalone runtime inspector
