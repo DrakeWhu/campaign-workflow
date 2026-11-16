@@ -115,7 +115,7 @@ def inspect(role: str, checkouts: dict[str, str], expected_shas: dict[str, str],
             script = Path(guiding_script).expanduser().resolve(strict=False)
             checkout = Path(checkouts["guiding"]).expanduser().resolve(strict=False)
             # Do not run the entry point: inspect its exact path-bootstrap idiom.
-            if not script.is_file() or not is_within(script, checkout):
+            if not script.is_file() or script.parent.parent != checkout:
                 checks.append({"id": "guiding_script_context", "status": "BLOCKED", "detail": f"entry point must exist inside guiding checkout: {script}"})
             else:
                 source = script.read_text(encoding="utf-8")
