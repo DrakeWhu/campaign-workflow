@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib
 import importlib.util
 import json
@@ -15,7 +16,7 @@ import sys
 
 sys.dont_write_bytecode = True
 
-ROLE_PYTHON = {"workflow": (3, 10), "optimizer": (3, 10), "guiding": (3, 10), "warpx": (3, 14)}
+ROLE_PYTHON = {"workflow": (3, 10, 12), "optimizer": (3, 10, 12), "guiding": (3, 10, 12), "warpx": (3, 14, 3)}
 REPO_PACKAGES = {"workflow": "campaign_workflow", "optimizer": "campaign_optimizer", "guiding": "cap_guiding"}
 STATUS_PRIORITY = {"PASS": 0, "WARN": 1, "UNKNOWN": 2, "BLOCKED": 3}
 
@@ -38,12 +39,13 @@ def is_within(candidate: str | Path, checkout: str | Path) -> bool:
         return False
 
 
-def check_python_version(role: str, version: tuple[int, int]) -> dict[str, str]:
+def check_python_version(role: str, version: tuple[int, ...]) -> dict[str, str]:
     expected = ROLE_PYTHON[role]
+    got = tuple(version[:3])
     return {
         "id": "python_version",
-        "status": "PASS" if version == expected else "BLOCKED",
-        "detail": f"expected {expected[0]}.{expected[1]}, got {version[0]}.{version[1]}",
+        "status": "PASS" if got == expected else "BLOCKED",
+        "detail": f"expected {'.'.join(map(str, expected))}, got {'.'.join(map(str, got))}",
     }
 
 
@@ -79,6 +81,9 @@ def check_checkout(name: str, path: Path, expected_sha: str | None) -> list[dict
     if rc:
         return [{"id": f"checkout_{name}", "status": "BLOCKED", "detail": f"git HEAD unavailable: {err}"}]
     resolved = path.resolve()
+    root_rc, root, root_err = run_git(path, "rev-parse", "--show-toplevel")
+    if root_rc or Path(root).resolve(strict=False) != resolved:
+        return [{"id": f"checkout_{name}", "status": "BLOCKED", "detail": f"checkout path must be the Git worktree root: supplied {resolved}; git root {root or root_err}"}]
     results.append({"id": f"checkout_{name}", "status": "PASS", "detail": f"{resolved} @ {head}"})
     if expected_sha:
         results.append({"id": f"revision_{name}", "status": "PASS" if head == expected_sha else "BLOCKED", "detail": f"expected {expected_sha}, got {head}"})
@@ -106,8 +111,43 @@ def check_linker(executable: str) -> dict[str, str]:
     return {"id": "linked_libraries", "status": "PASS", "detail": "no unresolved direct shared-library references reported by ldd"}
 
 
+def has_guiding_bootstrap(source: str) -> bool:
+    """Recognize the historical guiding entrypoint's real, top-level AST."""
+    try:
+        nodes = ast.parse(source).body
+    except SyntaxError:
+        return False
+    expected_nodes = ast.parse(
+        "from pathlib import Path\n"
+        "import sys\n"
+        "PROJECT_ROOT = Path(__file__).resolve().parents[1]\n"
+        "if str(PROJECT_ROOT) not in sys.path:\n"
+        "    sys.path.insert(0, str(PROJECT_ROOT))\n"
+    ).body
+    def match(node: ast.stmt, expected: ast.stmt) -> bool:
+        return ast.dump(node, include_attributes=False) == ast.dump(expected, include_attributes=False)
+    positions = []
+    start = 0
+    for expected in expected_nodes:
+        found = next((idx for idx in range(start, len(nodes)) if match(nodes[idx], expected)), None)
+        if found is None:
+            return False
+        positions.append(found)
+        start = found + 1
+    # The sys.path injection must precede package imports, not merely appear
+    # later in the file or in a comment/dead function.
+    for idx, node in enumerate(nodes):
+        if isinstance(node, ast.Import) and any(alias.name.split(".")[0] == "cap_guiding" for alias in node.names):
+            if idx < positions[-1]:
+                return False
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] == "cap_guiding":
+            if idx < positions[-1]:
+                return False
+    return True
+
+
 def inspect(role: str, checkouts: dict[str, str], expected_shas: dict[str, str], verify_imports: set[str] | None = None, guiding_script: str | None = None) -> dict[str, object]:
-    checks: list[dict[str, str]] = [check_python_version(role, sys.version_info[:2])]
+    checks: list[dict[str, str]] = [check_python_version(role, sys.version_info[:3])]
     if guiding_script:
         if role != "guiding" or "guiding" not in checkouts:
             checks.append({"id": "guiding_script_context", "status": "BLOCKED", "detail": "a guiding checkout and --role guiding are required"})
@@ -119,12 +159,8 @@ def inspect(role: str, checkouts: dict[str, str], expected_shas: dict[str, str],
                 checks.append({"id": "guiding_script_context", "status": "BLOCKED", "detail": f"entry point must exist inside guiding checkout: {script}"})
             else:
                 source = script.read_text(encoding="utf-8")
-                expected_idiom = (
-                    "PROJECT_ROOT = Path(__file__).resolve().parents[1]",
-                    "sys.path.insert(0, str(PROJECT_ROOT))",
-                )
-                if not all(marker in source for marker in expected_idiom):
-                    checks.append({"id": "guiding_script_context", "status": "BLOCKED", "detail": "entry point has no recognized PROJECT_ROOT sys.path bootstrap; cannot assume import behavior"})
+                if not has_guiding_bootstrap(source):
+                    checks.append({"id": "guiding_script_context", "status": "BLOCKED", "detail": "entry point lacks the expected top-level AST bootstrap before package imports"})
                 else:
                     # The verified entry point derives its root from __file__.
                     # Emulate this before import to reproduce script execution.
@@ -133,8 +169,13 @@ def inspect(role: str, checkouts: dict[str, str], expected_shas: dict[str, str],
     checks.append(check_linker(sys.executable))
     loaded = os.environ.get("LOADEDMODULES")
     expected_module = "Python/3.14.3" if role == "warpx" else "Python/3.10.12"
-    module_status = "UNKNOWN" if not loaded else ("PASS" if expected_module in loaded.split(":") else "WARN")
-    checks.append({"id": "loaded_modules", "status": module_status, "detail": f"expected {expected_module}; LOADEDMODULES={loaded or '<unset>'}"})
+    required_modules = {"GCC/12.1.0", expected_module}
+    if role == "warpx":
+        required_modules.add("warpx/26.05-gcc12-openmpi413-all-dims")
+    present = set((loaded or "").split(":")) if loaded else set()
+    missing = sorted(required_modules - present)
+    module_status = "UNKNOWN" if not loaded else ("BLOCKED" if missing else "PASS")
+    checks.append({"id": "loaded_modules", "status": module_status, "detail": f"required {', '.join(sorted(required_modules))}; missing {missing}; LOADEDMODULES={loaded or '<unset>'}"})
     for name, raw_path in checkouts.items():
         path = Path(raw_path).expanduser()
         checks.extend(check_checkout(name, path, expected_shas.get(name)))
@@ -151,6 +192,8 @@ def inspect(role: str, checkouts: dict[str, str], expected_shas: dict[str, str],
         checks.append({"id": "pywarpx_available", "status": "PASS" if spec else "BLOCKED", "detail": detail})
     if role in REPO_PACKAGES and role not in checkouts:
         checks.append({"id": f"checkout_{role}", "status": "UNKNOWN", "detail": "no checkout provided; cannot verify import provenance"})
+    for name in sorted((verify_imports or set()) - set(checkouts)):
+        checks.append({"id": f"import_{name}", "status": "BLOCKED", "detail": "requested import verification has no matching --checkout"})
     unused = set(expected_shas) - set(checkouts)
     for name in sorted(unused):
         checks.append({"id": f"revision_{name}", "status": "BLOCKED", "detail": "expected SHA provided without checkout"})
