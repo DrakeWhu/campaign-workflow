@@ -9,7 +9,8 @@ image, queue, campaign, or later checkout.
 
 | Role | Observed modules / environment |
 | --- | --- |
-| Workflow, optimizer, guiding analysis | `GCC/12.1.0`, `Python/3.10.12`, and the corresponding pre-existing `*-py310` venv |
+| N2 workflow and optimizer | `GCC/12.1.0`, `Python/3.10.12`, `~/apps/venvs/optimas-py310` (confirmed by effective imports after sourcing the N2 campaign environment) |
+| Guiding analysis | `GCC/12.1.0`, `Python/3.10.12`, `~/apps/venvs/guiding-analysis-py310`; the pinned N2 analysis runner also loads the WarpX module |
 | WarpX PICMI/runner | `GCC/12.1.0`, `Python/3.14.3`, `OpenBLAS/0.3.31`, `warpx/26.05-gcc12-openmpi413-all-dims`, and `~/apps/venvs/warpx-26.05-py314` |
 | Git after a module purge | The N2 Gate B scripts explicitly load `Git/2.41.0` |
 
@@ -78,7 +79,7 @@ inspection script.
 
 - At the pinned N2 input, `CAP_DRY_RUN=1 python input.py 2` calls
   `sim.write_input_file()` and returns before `sim.step()`; it **writes**
-  a serialized input and associated materialization evidence. It is not
+  a serialized input and may write further input artifacts depending on the wrapper. It is not
   a read-only preflight.
 - Materialization and `init_case_states` precede per-case validation.
   Never weaken a campaign-specific Gate B to accommodate a different
