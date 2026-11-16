@@ -106,8 +106,30 @@ def check_linker(executable: str) -> dict[str, str]:
     return {"id": "linked_libraries", "status": "PASS", "detail": "no unresolved direct shared-library references reported by ldd"}
 
 
-def inspect(role: str, checkouts: dict[str, str], expected_shas: dict[str, str], verify_imports: set[str] | None = None) -> dict[str, object]:
+def inspect(role: str, checkouts: dict[str, str], expected_shas: dict[str, str], verify_imports: set[str] | None = None, guiding_script: str | None = None) -> dict[str, object]:
     checks: list[dict[str, str]] = [check_python_version(role, sys.version_info[:2])]
+    if guiding_script:
+        if role != "guiding" or "guiding" not in checkouts:
+            checks.append({"id": "guiding_script_context", "status": "BLOCKED", "detail": "a guiding checkout and --role guiding are required"})
+        else:
+            script = Path(guiding_script).expanduser().resolve(strict=False)
+            checkout = Path(checkouts["guiding"]).expanduser().resolve(strict=False)
+            # Do not run the entry point: inspect its exact path-bootstrap idiom.
+            if not script.is_file() or not is_within(script, checkout):
+                checks.append({"id": "guiding_script_context", "status": "BLOCKED", "detail": f"entry point must exist inside guiding checkout: {script}"})
+            else:
+                source = script.read_text(encoding="utf-8")
+                expected_idiom = (
+                    "PROJECT_ROOT = Path(__file__).resolve().parents[1]",
+                    "sys.path.insert(0, str(PROJECT_ROOT))",
+                )
+                if not all(marker in source for marker in expected_idiom):
+                    checks.append({"id": "guiding_script_context", "status": "BLOCKED", "detail": "entry point has no recognized PROJECT_ROOT sys.path bootstrap; cannot assume import behavior"})
+                else:
+                    # The verified entry point derives its root from __file__.
+                    # Emulate this before import to reproduce script execution.
+                    sys.path.insert(0, str(checkout))
+                    checks.append({"id": "guiding_script_context", "status": "PASS", "detail": f"emulating explicit sys.path bootstrap in {script}; no analysis code executed"})
     checks.append(check_linker(sys.executable))
     loaded = os.environ.get("LOADEDMODULES")
     expected_module = "Python/3.14.3" if role == "warpx" else "Python/3.10.12"
@@ -142,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkout", action="append", default=[], metavar="ROLE=PATH", help="named workflow/optimizer/guiding checkout; repeat as needed")
     parser.add_argument("--expected-sha", action="append", default=[], metavar="ROLE=SHA", help="expected full commit; repeat as needed")
     parser.add_argument("--verify-import", action="append", choices=tuple(REPO_PACKAGES), default=[], help="also check this package import against its checkout")
+    parser.add_argument("--guiding-script", help="absolute guiding analysis entry point; reproduce its verified PROJECT_ROOT sys.path bootstrap (guiding role only)")
     args = parser.parse_args(argv)
     try:
         checkouts = parse_assignments(args.checkout, "--checkout")
@@ -152,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("--expected-sha requires a full 40-character Git SHA")
     except ValueError as exc:
         parser.error(str(exc))
-    report = inspect(args.role, checkouts, expected, set(args.verify_import))
+    report = inspect(args.role, checkouts, expected, set(args.verify_import), args.guiding_script)
     print(json.dumps(report, indent=2, sort_keys=True))
     return {"PASS": 0, "WARN": 1, "UNKNOWN": 1, "BLOCKED": 2}[report["status"]]
 
