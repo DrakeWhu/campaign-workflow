@@ -29,6 +29,20 @@ materialization, installation, or WarpX-execution workflow.
    Repeat --checkout and --expected-sha for other repositories whose
    provenance matters. Use --verify-import workflow or
    --verify-import guiding to also test their actual imports when available.
+   For guiding scripts that explicitly bootstrap their package root with
+   PROJECT_ROOT = Path(__file__).resolve().parents[1] and sys.path.insert(0, ...),
+   reproduce the actual entrypoint context with:
+
+       python -B .agents/skills/sunrise-runtime/scripts/inspect_runtime.py \
+         --role guiding \
+         --checkout guiding=/absolute/guiding/worktree \
+         --expected-sha guiding=FULL_40_CHARACTER_SHA \
+         --guiding-script /absolute/guiding/worktree/scripts/analyze_case.py
+
+   The inspector checks this exact bootstrap idiom in the named script and
+   verifies that the script's parent directory resolves to the checkout.
+   This deliberately differs from testing an ambient package import from
+   an arbitrary directory; record which mode was tested.
 5. Record the JSON output and classify each check. PASS confirms only the
    checked property; WARN and UNKNOWN require review, and BLOCKED
    prohibits proceeding as if the runtime were validated.
@@ -44,7 +58,8 @@ materialization, installation, or WarpX-execution workflow.
 - Repo path, full HEAD, expected revision, and checkout cleanliness.
 - Imported campaign_workflow, campaign_optimizer, or cap_guiding
   package __file__ under the intended checkout (for selected role and
-  any explicitly requested additional import checks).
+  any explicitly requested additional import checks); guiding-script mode
+  documents and reproduces the verified script-level sys.path bootstrap.
 - For WarpX, only pywarpx discoverability is tested. This does **not**
   initialize WarpX, verify a PICMI input, or execute physics.
 
