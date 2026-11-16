@@ -23,6 +23,14 @@
 - Follow `docs/hpc/README.md` for site selection and operation classes; read
   `docs/hpc/sunrise.md` only for SUNRISE work. Do not apply site-specific
   commands to LYNX or ELI without independent verification.
+- For SUNRISE environment problems, select `$sunrise-runtime` when available.
+  Before PIC campaign preparation, extension or Gate B, select
+  `$pic-campaign-preflight`. Before explicitly authorized submission,
+  recovery or cleanup planning, select `$pic-campaign-execution` **after**
+  preflight. These repository skills live in `.agents/skills/` when present
+  in the selected checkout; they do not travel automatically to historical
+  production commits. If a needed skill is absent, report that explicitly
+  and use the pinned native contracts instead of inventing operations.
 - Keep read-only inspection separate from state-writing preparation, PICMI
   serialization, scheduler execution, and raw-data cleanup. Both PICMI dry runs
   and cleanup dry runs can write files.
