@@ -39,8 +39,10 @@ materialization, installation, or WarpX-execution workflow.
          --expected-sha guiding=FULL_40_CHARACTER_SHA \
          --guiding-script /absolute/guiding/worktree/scripts/analyze_case.py
 
-   The inspector checks this exact bootstrap idiom in the named script and
-   verifies that the script's parent directory resolves to the checkout.
+   The inspector checks the top-level Python AST for the historical
+   bootstrap (not substrings in comments), verifies that it precedes
+   cap_guiding imports, and checks that the entry point resolves to the
+   expected checkout. This does not execute any analysis scripts.
    This deliberately differs from testing an ambient package import from
    an arbitrary directory; record which mode was tested.
 5. Record the JSON output and classify each check. PASS confirms only the
@@ -53,9 +55,12 @@ materialization, installation, or WarpX-execution workflow.
 
 ## Expected evidence and limits
 
-- Exact sys.executable/Python version and LOADEDMODULES evidence.
+- Exact sys.executable/Python micro-version and required GCC/Python (and,
+  for WarpX, WarpX module) in LOADEDMODULES. Role versions are pinned to
+  the documented N2 2026-11-16 site configuration, not a generic HPC API.
 - Direct shared-library resolution with ldd when available.
-- Repo path, full HEAD, expected revision, and checkout cleanliness.
+- Exact Git worktree root, full HEAD, expected revision, and checkout cleanliness.
+  Requested import checks without their checkout are BLOCKED, not skipped.
 - Imported campaign_workflow, campaign_optimizer, or cap_guiding
   package __file__ under the intended checkout (for selected role and
   any explicitly requested additional import checks); guiding-script mode
