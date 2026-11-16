@@ -118,8 +118,6 @@ def has_guiding_bootstrap(source: str) -> bool:
     except SyntaxError:
         return False
     expected_nodes = ast.parse(
-        "from pathlib import Path\n"
-        "import sys\n"
         "PROJECT_ROOT = Path(__file__).resolve().parents[1]\n"
         "if str(PROJECT_ROOT) not in sys.path:\n"
         "    sys.path.insert(0, str(PROJECT_ROOT))\n"
@@ -134,6 +132,21 @@ def has_guiding_bootstrap(source: str) -> bool:
             return False
         positions.append(found)
         start = found + 1
+    # These two imports are required before the bootstrap; their order
+    # differs between real guiding scripts and should not be prescribed.
+    before_assignment = nodes[:positions[0]]
+    has_path = any(
+        isinstance(node, ast.ImportFrom) and node.module == "pathlib"
+        and any(alias.name == "Path" and alias.asname is None for alias in node.names)
+        for node in before_assignment
+    )
+    has_sys = any(
+        isinstance(node, ast.Import)
+        and any(alias.name == "sys" and alias.asname is None for alias in node.names)
+        for node in before_assignment
+    )
+    if not (has_path and has_sys):
+        return False
     # The sys.path injection must precede package imports, not merely appear
     # later in the file or in a comment/dead function.
     for idx, node in enumerate(nodes):
