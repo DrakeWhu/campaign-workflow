@@ -12,6 +12,24 @@
   commands. Start with `CAMPAIGN_WORKFLOW.md`, `ANALYSIS_MODULE_CONTRACT.md`,
   `CANDIDATE_BATCH_CONTRACT.md`, and `CLEANUP_SAFETY.md`.
 
+## HPC operations and provenance
+
+- Resolve the actual campaign paths, Git commits, import locations, and runtime
+  environment before proposing or running any operation. A branch name or
+  `PYTHONPATH` setting alone is not evidence of the code being executed.
+- Treat historical production worktrees and active campaigns as immutable unless
+  the task explicitly authorizes their modification; current `AGENTS.md` and
+  skills may not exist in those historical commits.
+- Follow `docs/hpc/README.md` for site selection and operation classes; read
+  `docs/hpc/sunrise.md` only for SUNRISE work. Do not apply site-specific
+  commands to LYNX or ELI without independent verification.
+- Keep read-only inspection separate from state-writing preparation, PICMI
+  serialization, scheduler execution, and raw-data cleanup. Both PICMI dry runs
+  and cleanup dry runs can write files.
+- Prefer existing guards, validators, and launcher contracts to parallel
+  implementations. Missing or mismatched runtime evidence must fail closed
+  before submission, not trigger silent contract changes.
+
 ## Compatibility and scientific evidence
 
 - Preserve legacy `CAP_*` materialization defaults, explicit environment-column
