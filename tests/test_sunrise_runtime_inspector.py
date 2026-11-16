@@ -36,8 +36,10 @@ class RuntimeInspectorTests(unittest.TestCase):
             self.assertFalse(INSPECTOR.is_within(other / "package.py", root))
 
     def test_python_role_mismatch_blocks(self):
-        self.assertEqual(INSPECTOR.check_python_version("optimizer", (3, 14))["status"], "BLOCKED")
-        self.assertEqual(INSPECTOR.check_python_version("warpx", (3, 14))["status"], "PASS")
+        self.assertEqual(INSPECTOR.check_python_version("optimizer", (3, 14, 3))["status"], "BLOCKED")
+        self.assertEqual(INSPECTOR.check_python_version("warpx", (3, 14, 3))["status"], "PASS")
+        self.assertEqual(INSPECTOR.check_python_version("warpx", (3, 14, 2))["status"], "BLOCKED")
+        self.assertEqual(INSPECTOR.check_python_version("workflow", (3, 10, 11))["status"], "BLOCKED")
 
     def test_wrong_import_checkout_blocks(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -96,6 +98,57 @@ class RuntimeInspectorTests(unittest.TestCase):
             report = INSPECTOR.inspect("guiding", {"guiding": str(root)}, {}, guiding_script=str(script))
             checks = {row["id"]: row for row in report["checks"]}
             self.assertEqual(checks["guiding_script_context"]["status"], "BLOCKED")
+
+    def test_guiding_ast_rejects_comment_only_bootstrap(self):
+        source = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "# PROJECT_ROOT = Path(__file__).resolve().parents[1]\n"
+            "# sys.path.insert(0, str(PROJECT_ROOT))\n"
+        )
+        self.assertFalse(INSPECTOR.has_guiding_bootstrap(source))
+
+    def test_guiding_ast_requires_bootstrap_before_imports(self):
+        valid = (
+            "import sys\nfrom pathlib import Path\n"
+            "PROJECT_ROOT = Path(__file__).resolve().parents[1]\n"
+            "if str(PROJECT_ROOT) not in sys.path:\n"
+            "    sys.path.insert(0, str(PROJECT_ROOT))\n"
+            "from cap_guiding.metrics import compute_case_rows\n"
+        )
+        self.assertTrue(INSPECTOR.has_guiding_bootstrap(valid))
+        invalid = valid.replace(
+            "PROJECT_ROOT = Path(__file__).resolve().parents[1]\n",
+            "from cap_guiding.metrics import compute_case_rows\n"
+            "PROJECT_ROOT = Path(__file__).resolve().parents[1]\n",
+        )
+        self.assertFalse(INSPECTOR.has_guiding_bootstrap(invalid))
+
+    def test_nested_directory_is_not_a_git_checkout_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            nested = root / "nested"
+            nested.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Fixture"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "fixture@example.test"], check=True)
+            (root / "file.txt").write_text("a\n")
+            subprocess.run(["git", "-C", str(root), "add", "file.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "initial"], check=True)
+            result = INSPECTOR.check_checkout("workflow", nested, None)
+            self.assertEqual(result[0]["status"], "BLOCKED")
+
+    def test_requested_import_without_checkout_blocks(self):
+        report = INSPECTOR.inspect("workflow", {}, {}, verify_imports={"optimizer"})
+        checks = {row["id"]: row for row in report["checks"]}
+        self.assertEqual(checks["import_optimizer"]["status"], "BLOCKED")
+
+    def test_incomplete_modules_block(self):
+        from unittest.mock import patch
+        with patch.dict("os.environ", {"LOADEDMODULES": "Python/3.10.12"}):
+            report = INSPECTOR.inspect("workflow", {}, {})
+            checks = {row["id"]: row for row in report["checks"]}
+            self.assertEqual(checks["loaded_modules"]["status"], "BLOCKED")
 
     def test_linker_missing_library_blocks(self):
         fake = subprocess.CompletedProcess(args=[], returncode=0, stdout="libpython3.10.so.1.0 => not found\n", stderr="")
