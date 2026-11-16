@@ -79,7 +79,8 @@ class RuntimeInspectorTests(unittest.TestCase):
                 "from pathlib import Path\n"
                 "import sys\n"
                 "PROJECT_ROOT = Path(__file__).resolve().parents[1]\n"
-                "sys.path.insert(0, str(PROJECT_ROOT))\n"
+                "if str(PROJECT_ROOT) not in sys.path:\n"
+                "    sys.path.insert(0, str(PROJECT_ROOT))\n"
             )
             with patch.object(sys, "path", list(sys.path)):
                 sys.modules.pop("cap_guiding", None)
