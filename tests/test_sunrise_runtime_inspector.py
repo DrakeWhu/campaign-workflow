@@ -66,6 +66,37 @@ class RuntimeInspectorTests(unittest.TestCase):
             (root / "file.txt").write_text("b\n")
             self.assertEqual(next(item for item in INSPECTOR.check_checkout("workflow", root, head) if item["id"] == "clean_workflow")["status"], "BLOCKED")
 
+    def test_guiding_entrypoint_bootstrap_matches_production(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scripts").mkdir()
+            (root / "cap_guiding").mkdir()
+            (root / "cap_guiding" / "__init__.py").write_text("version = 1\n")
+            script = root / "scripts" / "analyze_case.py"
+            script.write_text(
+                "from pathlib import Path\n"
+                "import sys\n"
+                "PROJECT_ROOT = Path(__file__).resolve().parents[1]\n"
+                "sys.path.insert(0, str(PROJECT_ROOT))\n"
+            )
+            with patch.object(sys, "path", list(sys.path)):
+                sys.modules.pop("cap_guiding", None)
+                report = INSPECTOR.inspect("guiding", {"guiding": str(root)}, {}, guiding_script=str(script))
+                checks = {row["id"]: row for row in report["checks"]}
+                self.assertEqual(checks["guiding_script_context"]["status"], "PASS")
+                self.assertEqual(checks["import_guiding"]["status"], "PASS")
+                sys.modules.pop("cap_guiding", None)
+
+    def test_guiding_bootstrap_refuses_unverified_entrypoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scripts").mkdir()
+            script = root / "scripts" / "analyze_case.py"
+            script.write_text("print('no bootstrap')\n")
+            report = INSPECTOR.inspect("guiding", {"guiding": str(root)}, {}, guiding_script=str(script))
+            checks = {row["id"]: row for row in report["checks"]}
+            self.assertEqual(checks["guiding_script_context"]["status"], "BLOCKED")
+
     def test_linker_missing_library_blocks(self):
         fake = subprocess.CompletedProcess(args=[], returncode=0, stdout="libpython3.10.so.1.0 => not found\n", stderr="")
         with patch.object(INSPECTOR.shutil, "which", return_value="/usr/bin/ldd"), patch.object(INSPECTOR.subprocess, "run", return_value=fake):
